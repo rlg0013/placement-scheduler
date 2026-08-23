@@ -103,11 +103,13 @@ const (
 )
 
 // Interview is the SCHEDULER'S OUTPUT — one unit of "this student sits in
-// front of this panel, starting at this time." Room is deliberately NOT
-// repeated here — a panel's room for that day is looked up via
-// PanelRoomAssignment, so there's one source of truth for "where."
-// Nothing about the schedule is stored on Student or Company either, so
-// diffing two schedules is a simple set-comparison over []Interview.
+// front of this panel, in this room, starting at this time." RoomID is
+// stored per-interview for query convenience, but this does NOT mean a
+// panel is free to change rooms between interviews — the scheduler is
+// responsible for keeping one panel pinned to one room for the whole
+// day (see panelRoom stickiness in RunWave). Nothing about the schedule
+// is stored on Student or Company, so diffing two schedules is a simple
+// set-comparison over []Interview.
 type Interview struct {
 	ID                string
 	CompanyID         string
@@ -120,21 +122,10 @@ type Interview struct {
 	UnscheduledReason string // required if Status == StatusUnscheduled
 }
 
-// PanelRoomAssignment is the scheduler's decision of which room a panel
-// occupies for a given day. One entry per (panel, day) — this is what
-// enforces "a panel doesn't move rooms mid-day" as a scheduling output
-// constraint, not an input assumption.
-type PanelRoomAssignment struct {
-	PanelID string
-	RoomID  string
-	Day     time.Time // truncated to the day; the specific date this assignment applies to
-}
-
-// Schedule is a full snapshot: every interview decision made so far, plus
-// which room each panel is using each day. A replan produces a NEW
-// Schedule; diff old vs new for the change summary the coordinator needs.
+// Schedule is a full snapshot: every interview decision made so far.
+// A replan produces a NEW Schedule; diff old vs new for the change
+// summary the coordinator needs.
 type Schedule struct {
-	Interviews      []Interview
-	RoomAssignments []PanelRoomAssignment
-	GeneratedAt     time.Time
+	Interviews  []Interview
+	GeneratedAt time.Time
 }
