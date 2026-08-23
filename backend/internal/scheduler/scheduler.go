@@ -503,32 +503,22 @@ func RunMatching(
 		// - If the panel already has a room, reuse it.
 		// - Otherwise find and assign its first room.
 		roomID, alreadyAssigned := panelRoom[panel.ID]
-
-		if !alreadyAssigned {
-			foundRoomID, nextRoomTime, roomFound :=
-				FindAvailableRoom(
-					data.Rooms,
-					roomBusyUntil,
-					currentTime,
-				)
-
-			if !roomFound {
-				if nextRoomTime.IsZero() ||
-					!nextRoomTime.Before(waveEnd) {
-					continue
-				}
-
-				heap.Push(
-					panels,
-					PanelHeapItem{
-						NextFree: nextRoomTime,
-						Panel:    panel,
-					},
-				)
-
+		if alreadyAssigned {
+			if busy, isBusy := roomBusyUntil[roomID]; isBusy && busy.After(currentTime) {
+				// Sticky room is legitimately in use by someone else right now —
+				// this panel must WAIT for it, never switch rooms or barge in.
+				heap.Push(panels, PanelHeapItem{NextFree: busy, Panel: panel})
 				continue
 			}
-
+		} else {
+			foundRoomID, nextRoomTime, roomFound := FindAvailableRoom(data.Rooms, roomBusyUntil, currentTime)
+			if !roomFound {
+				if nextRoomTime.IsZero() || !nextRoomTime.Before(waveEnd) {
+					continue
+				}
+				heap.Push(panels, PanelHeapItem{NextFree: nextRoomTime, Panel: panel})
+				continue
+			}
 			roomID = foundRoomID
 			panelRoom[panel.ID] = roomID
 		}
