@@ -14,6 +14,16 @@ const ORIGINAL_UNSCHEDULED_REASONS = new Set([
   "ran out of interview time in wave",
 ]);
 
+const DAY_OPTIONS = [
+  { value: "", label: "Select when..." },
+  { value: "2026-09-01T09:00", label: "Day 1 AM wave (Sep 1, 09:00)" },
+  { value: "2026-09-01T13:00", label: "Day 1 PM wave (Sep 1, 13:00)" },
+  { value: "2026-09-01T00:00", label: "Day 1 full day (Sep 1, all)" },
+  { value: "2026-09-02T09:00", label: "Day 2 (Sep 2, 09:00)" },
+  { value: "2026-09-03T09:00", label: "Day 3 (Sep 3, 09:00)" },
+  { value: "2026-09-04T09:00", label: "Day 4 (Sep 4, 09:00)" },
+];
+
 const KIND_FIELDS = {
   student_dropout: ["student_id"],
   panel_dropout: ["panel_id"],
@@ -37,10 +47,10 @@ const KIND_LABELS = {
 };
 
 const KIND_SUMMARIES = {
-  student_dropout: "Cancel one student's future interview, then compact that same panel where possible.",
-  panel_dropout: "Remove one panel and try to absorb its queue into surviving panels for the same company.",
-  late_company: "Re-feed one company's future interviews after the delayed arrival time.",
-  room_unavailable: "Move future interviews out of one room, panel by panel.",
+  student_dropout: "Pick a student below to cancel their interview and compact the panel.",
+  panel_dropout: "Pick a panel below. All its future interviews get absorbed by surviving panels.",
+  late_company: "Pick a company below and specify how late they are.",
+  room_unavailable: "Pick a room below. All its future interviews move to another room.",
 };
 
 function fmtTime(t) {
@@ -262,9 +272,10 @@ export default function App() {
     setDiff(null);
 
     const optimisticBefore = summarizeInterviews(interviews);
+    const atIST = at ? at + ":00+05:30" : new Date().toISOString();
     const body = {
       kind,
-      at: at ? new Date(at).toISOString() : new Date().toISOString(),
+      at: atIST,
       ...fields,
     };
     if (body.delay_minutes) {
@@ -337,11 +348,34 @@ export default function App() {
 
   const optionLists = useMemo(() => {
     const scheduled = interviews.filter((iv) => iv.Status === STATUS.Scheduled);
+    const studentContext = {};
+    scheduled.forEach((iv) => {
+      if (!studentContext[iv.StudentID]) studentContext[iv.StudentID] = iv;
+    });
+    const panelContext = {};
+    scheduled.forEach((iv) => {
+      if (!panelContext[iv.PanelID]) panelContext[iv.PanelID] = { company: iv.CompanyID, count: 0 };
+      panelContext[iv.PanelID].count++;
+    });
+    const roomContext = {};
+    scheduled.forEach((iv) => {
+      if (!roomContext[iv.RoomID]) roomContext[iv.RoomID] = { count: 0 };
+      roomContext[iv.RoomID].count++;
+    });
     return {
-      students: uniqueSorted(scheduled.map((iv) => iv.StudentID)),
-      panels: uniqueSorted(scheduled.map((iv) => iv.PanelID)),
+      students: uniqueSorted(scheduled.map((iv) => iv.StudentID)).map((id) => {
+        const iv = studentContext[id];
+        return iv ? `${id} (${iv.CompanyID})` : id;
+      }),
+      panels: uniqueSorted(scheduled.map((iv) => iv.PanelID)).map((id) => {
+        const info = panelContext[id];
+        return info ? `${id} (${info.company}, ${info.count}iv)` : id;
+      }),
       companies: uniqueSorted(interviews.map((iv) => iv.CompanyID)),
-      rooms: uniqueSorted(scheduled.map((iv) => iv.RoomID)),
+      rooms: uniqueSorted(scheduled.map((iv) => iv.RoomID)).map((id) => {
+        const info = roomContext[id];
+        return info ? `${id} (${info.count}iv)` : id;
+      }),
     };
   }, [interviews]);
 
@@ -452,6 +486,7 @@ export default function App() {
                   onChange={(e) => {
                     setKind(e.target.value);
                     setFields({});
+                    setAt("");
                   }}
                   style={styles.input}
                 >
@@ -461,6 +496,20 @@ export default function App() {
                   <option value="room_unavailable">Room unavailable</option>
                 </select>
               </label>
+
+              <QuickPick interviews={interviews} kind={kind} onSelect={(data) => {
+                setFields((f) => ({ ...f, ...data }));
+                if (kind === "student_dropout" && data.student_id) {
+                  const iv = interviews.find(
+                    (i) => i.StudentID === data.student_id && i.Status === STATUS.Scheduled
+                  );
+                  if (iv) {
+                    const d = new Date(iv.StartTime);
+                    const pad = (n) => String(n).padStart(2, "0");
+                    setAt(`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`);
+                  }
+                }
+              }} />
 
               {KIND_FIELDS[kind].map((name) => {
                 const meta = FIELD_META[name];
@@ -481,16 +530,34 @@ export default function App() {
                 );
               })}
 
-              <label style={styles.label}>
-                Effective at
-                <input
-                  type="datetime-local"
-                  style={styles.input}
-                  value={at}
-                  onChange={(e) => setAt(e.target.value)}
-                  required
-                />
-              </label>
+              {(kind === "student_dropout" || kind === "late_company") && (
+                <label style={styles.label}>
+                  Effective at
+                  <input
+                    type="datetime-local"
+                    style={styles.input}
+                    value={at}
+                    onChange={(e) => setAt(e.target.value)}
+                    required
+                  />
+                </label>
+              )}
+
+              {(kind === "panel_dropout" || kind === "room_unavailable") && (
+                <label style={styles.label}>
+                  Affect from
+                  <select
+                    style={styles.input}
+                    value={at}
+                    onChange={(e) => setAt(e.target.value)}
+                    required
+                  >
+                    {DAY_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>{opt.label}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
 
               <button type="submit" disabled={submitting} style={styles.primaryButton}>
                 {submitting ? "Applying..." : "Apply disruption"}
@@ -820,6 +887,101 @@ function NotifyChip({ target }) {
       {target.ID ? ` ${target.ID}: ` : " "}
       {target.Message}
     </span>
+  );
+}
+
+function QuickPick({ interviews, kind, onSelect }) {
+  const scheduled = interviews.filter((iv) => iv.Status === STATUS.Scheduled);
+
+  let items = [];
+  if (kind === "student_dropout") {
+    const byStudent = {};
+    scheduled.forEach((iv) => {
+      if (!byStudent[iv.StudentID]) byStudent[iv.StudentID] = [];
+      byStudent[iv.StudentID].push(iv);
+    });
+    items = Object.entries(byStudent)
+      .map(([sid, ivs]) => {
+        const iv = ivs[0];
+        return {
+          id: sid,
+          main: sid,
+          sub: `${iv.CompanyID} | ${iv.PanelID} | ${iv.RoomID}`,
+          time: fmtTime(iv.StartTime),
+          data: { student_id: sid },
+        };
+      })
+      .sort((a, b) => a.main.localeCompare(b.main));
+  } else if (kind === "panel_dropout") {
+    const byPanel = {};
+    scheduled.forEach((iv) => {
+      if (!byPanel[iv.PanelID]) byPanel[iv.PanelID] = { company: iv.CompanyID, count: 0, rooms: new Set() };
+      byPanel[iv.PanelID].count++;
+      byPanel[iv.PanelID].rooms.add(iv.RoomID);
+    });
+    items = Object.entries(byPanel)
+      .map(([pid, info]) => ({
+        id: pid,
+        main: pid,
+        sub: `${info.company} | ${info.count} interviews | Room ${[...info.rooms].join(",")}`,
+        time: "",
+        data: { panel_id: pid },
+      }))
+      .sort((a, b) => a.main.localeCompare(b.main));
+  } else if (kind === "room_unavailable") {
+    const byRoom = {};
+    scheduled.forEach((iv) => {
+      if (!byRoom[iv.RoomID]) byRoom[iv.RoomID] = { panels: new Set(), count: 0 };
+      byRoom[iv.RoomID].panels.add(iv.PanelID);
+      byRoom[iv.RoomID].count++;
+    });
+    items = Object.entries(byRoom)
+      .map(([rid, info]) => ({
+        id: rid,
+        main: rid,
+        sub: `${info.count} interviews | Panels: ${[...info.panels].slice(0, 3).join(",")}${info.panels.size > 3 ? "..." : ""}`,
+        time: "",
+        data: { room_id: rid },
+      }))
+      .sort((a, b) => a.main.localeCompare(b.main));
+  } else if (kind === "late_company") {
+    const byCompany = {};
+    scheduled.forEach((iv) => {
+      if (!byCompany[iv.CompanyID]) byCompany[iv.CompanyID] = { count: 0, panels: new Set(), earliest: iv.StartTime };
+      byCompany[iv.CompanyID].count++;
+      byCompany[iv.CompanyID].panels.add(iv.PanelID);
+    });
+    items = Object.entries(byCompany)
+      .map(([cid, info]) => ({
+        id: cid,
+        main: cid,
+        sub: `${info.count} interviews | ${info.panels.size} panels`,
+        time: fmtTime(info.earliest),
+        data: { company_id: cid },
+      }))
+      .sort((a, b) => a.main.localeCompare(b.main));
+  }
+
+  if (items.length === 0) return null;
+
+  return (
+    <div style={styles.quickPick}>
+      <div style={styles.quickPickHeader}>Click to select:</div>
+      <div style={styles.quickPickList}>
+        {items.map((item) => (
+          <button
+            type="button"
+            key={item.id}
+            onClick={() => onSelect(item.data)}
+            style={styles.quickPickItem}
+          >
+            <span style={styles.quickPickMain}>{item.main}</span>
+            <span style={styles.quickPickSub}>{item.sub}</span>
+            {item.time && <span style={styles.quickPickTime}>{item.time}</span>}
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -1285,5 +1447,61 @@ const styles = {
     color: "#64748b",
     fontSize: 12,
     textAlign: "center",
+  },
+  quickPick: {
+    marginBottom: 14,
+    border: "1px solid #e2e8f0",
+    borderRadius: 10,
+    background: "linear-gradient(180deg, #ffffff 0%, #f8fafc 100%)",
+    overflow: "hidden",
+  },
+  quickPickHeader: {
+    padding: "8px 12px",
+    background: "linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 100%)",
+    fontSize: 11,
+    fontWeight: 600,
+    color: "#475569",
+    textTransform: "uppercase",
+    letterSpacing: "0.5px",
+    borderBottom: "1px solid #e2e8f0",
+  },
+  quickPickList: {
+    display: "flex",
+    flexDirection: "column",
+    maxHeight: 200,
+    overflowY: "auto",
+  },
+  quickPickItem: {
+    display: "grid",
+    gridTemplateColumns: "auto 1fr auto",
+    gap: "4px 10px",
+    alignItems: "center",
+    padding: "7px 12px",
+    border: "none",
+    borderBottom: "1px solid #f1f5f9",
+    background: "transparent",
+    cursor: "pointer",
+    textAlign: "left",
+    fontSize: 12,
+    transition: "background 0.1s ease",
+  },
+  quickPickMain: {
+    fontWeight: 700,
+    color: "#0f172a",
+    fontFamily: "monospace",
+    fontSize: 12,
+  },
+  quickPickSub: {
+    color: "#64748b",
+    fontSize: 11,
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+  },
+  quickPickTime: {
+    color: "#6366f1",
+    fontWeight: 600,
+    fontSize: 11,
+    whiteSpace: "nowrap",
   },
 };
