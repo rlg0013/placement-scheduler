@@ -16,7 +16,7 @@ College placement weeks are chaotic. Companies arrive late, panels drop out, roo
 1. **Generates realistic placement data** — companies tiered by hiring volume (mass recruiters, mid-tier, niche), student CGPAs, shortlists, panels, and rooms
 2. **Schedules interviews optimally** using an event-driven matching algorithm with panel room stickiness
 3. **Handles live disruptions** by replanning affected interviews in real-time while preserving invariants
-4. **Provides a control dashboard** for coordinators to trigger disruptions, view diffs, and undo changes
+4. **Provides a minimal control dashboard** for coordinators to trigger disruptions, view diffs, browse records, and undo changes
 
 ## Architecture
 
@@ -37,10 +37,12 @@ placement-scheduler/
 │       │   └── dispatch.go           # Disruption type router
 │       └── api/
 │           ├── handlers.go           # HTTP endpoints
-│           └── disruptions.go        # Request parsing
+│           ├── disruptions.go        # Request parsing and validation
+│           └── *_test.go             # API, scheduler, and replan regression tests
 └── frontend/                         # React + Vite frontend
     └── src/
-        └── App.jsx                   # Single-page control dashboard
+        ├── App.jsx                   # Single-page control dashboard
+        └── index.css                 # Global theme tokens
 ```
 
 ## Key Features
@@ -96,13 +98,15 @@ Handles 4 disruption types with clone-before-mutate safety:
 
 ### Frontend Dashboard (`App.jsx`)
 
-Single-page control console with:
+Single-page control console with a minimal, operations-first layout:
 
-- **Schedule Overview**: Live metrics (total, scheduled, original gaps, disruption gaps)
-- **Disruption Control**: Form to trigger any of the 4 disruption types
-- **Diff Log**: Before/after comparison with notification targets
-- **Schedule Browser**: Paginated, filterable table of all interviews
+- **Overview**: Live metrics (total, scheduled, original gaps, disruption gaps)
+- **Act**: Form and quick-pick lists to trigger any of the 4 disruption types
+- **Review**: Before/after diff log with notification targets and reason breakdowns
+- **Inspect**: Paginated, filterable table of all interviews
 - **Undo**: Roll back to previous state
+
+The UI uses a restrained dark header, flat cards, scoped navigation, and responsive grids so each workflow has its own breathing space without hiding dense schedule data.
 
 ## API Endpoints
 
@@ -124,6 +128,8 @@ Single-page control console with:
 }
 ```
 
+`POST /disruptions` validates the fields required by each disruption type before reaching the replan engine. Missing `at`, missing target IDs, unknown disruption kinds, and non-positive company delays are rejected with `400 Bad Request`.
+
 ## Running the Project
 
 ### Prerequisites
@@ -134,8 +140,11 @@ Single-page control console with:
 ```bash
 cd backend
 go run ./cmd/server          # Starts API on :8080
+go test ./...                # Automated package, API, scheduler, and replan tests
+go vet ./...                 # Static analysis
 go run ./cmd/scheduler-test  # Validate scheduling invariants
 go run ./cmd/replan-test     # Validate replanning invariants
+go run ./cmd/gen-test        # Inspect generated data distribution and capacity
 ```
 
 ### Frontend
@@ -143,6 +152,8 @@ go run ./cmd/replan-test     # Validate replanning invariants
 cd frontend
 npm install
 npm run dev    # Starts Vite dev server on :5173
+npm run lint   # ESLint checks
+npm run build  # Production build
 ```
 
 ## Tech Stack
@@ -168,9 +179,22 @@ npm run dev    # Starts Vite dev server on :5173
 
 ## Validation
 
-All scheduling invariants are automatically checked:
+The project has both automated tests and human-readable validation commands.
+
+Automated backend tests cover:
+
+- Disruption request validation
+- Generated schedule invariants
+- Student double-booking prevention
+- Room double-booking prevention
+- Panel room stickiness
+- Replan invariant preservation across all disruption types
+- Diff entries matching the resulting schedule
 
 ```bash
+go test ./...
+go vet ./...
+
 # Scheduler invariants
 go run ./cmd/scheduler-test
 # ✅ Student double-booking check PASSED
@@ -185,6 +209,15 @@ go run ./cmd/replan-test
 # ✅ after LateCompany OK
 # ✅ after RoomUnavailable OK
 ```
+
+Frontend validation:
+
+```bash
+npm run lint
+npm run build
+```
+
+The latest UI pass was also checked in-browser at desktop and mobile widths for console errors and page-level horizontal overflow.
 
 ## License
 
