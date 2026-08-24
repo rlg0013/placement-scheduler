@@ -33,6 +33,8 @@ type Config struct {
 	PlacementStartDate time.Time // Day 1's date; days run sequentially from here
 }
 
+var IST = time.FixedZone("IST", 5*3600+30*60)
+
 func DefaultConfig() Config {
 	return Config{
 		Seed:               42,
@@ -41,7 +43,7 @@ func DefaultConfig() Config {
 		NumMassRecruiters:  8,
 		NumMidTier:         17,
 		NumNiche:           10, // 8+17+10 = 35 companies total
-		PlacementStartDate: time.Date(2026, 9, 1, 9, 0, 0, 0, time.UTC),
+		PlacementStartDate: time.Date(2026, 9, 1, 9, 0, 0, 0, IST),
 	}
 }
 

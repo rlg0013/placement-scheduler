@@ -75,10 +75,20 @@ type ChangeEntry struct {
 	Notify    []NotifyTarget
 }
 
+type ScheduleSummary struct {
+	Total              int
+	Scheduled          int
+	Unscheduled        int
+	Cancelled          int
+	UnscheduledReasons map[string]int
+}
+
 type Diff struct {
-	Cause     Disruption
-	Changes   []ChangeEntry
-	Timestamp time.Time
+	Cause         Disruption
+	Changes       []ChangeEntry
+	Timestamp     time.Time
+	BeforeSummary *ScheduleSummary `json:",omitempty"`
+	AfterSummary  *ScheduleSummary `json:",omitempty"`
 }
 
 func interviewToSlot(iv models.Interview) InterviewSlot {
