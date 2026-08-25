@@ -4,3 +4,6 @@ deliverables/presentation-render/
 deliverables/writeup-render/
 deliverables/*.inspect.ndjson
 deliverables/*montage.webp
+
+deliverables/*.pptx
+deliverables/*.docx
