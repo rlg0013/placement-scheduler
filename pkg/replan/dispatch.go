@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	"placement-scheduler/internal/models"
-	"placement-scheduler/internal/scheduler"
+	"placement-scheduler/pkg/models"
+	"placement-scheduler/pkg/scheduler"
 )
 
 // Apply dispatches a Disruption to its matching Replan* function based on

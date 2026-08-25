@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useTheme } from "./ThemeContext.jsx";
 import "./App.css";
 
-const API = import.meta.env.VITE_API_URL || "http://localhost:8080";
+const API = import.meta.env.VITE_API_URL || (import.meta.env.PROD ? "/api" : "http://localhost:8080");
 const PAGE_SIZE = 25;
 
 const STATUS = {
@@ -152,7 +152,7 @@ function uniqueSorted(values) {
 }
 
 function slotEmpty(slot) {
-  return !slot || (!slot.PanelID && !slot.RoomID && !slot.At);
+  return !slot || (!slot.PanelID && !slot.RoomID);
 }
 
 function buildDiffSummary(diff, kind) {
@@ -501,6 +501,7 @@ export default function App() {
   const { theme } = useTheme();
   const [interviews, setInterviews] = useState([]);
   const [baselineSummary, setBaselineSummary] = useState(null);
+  const [liveSummary, setLiveSummary] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
@@ -522,13 +523,13 @@ export default function App() {
   const [page, setPage] = useState(1);
 
   async function fetchSchedule() {
-    const res = await fetch(`${API}/schedule`);
+    const res = await fetch(`${API}/schedule`, { cache: "no-store" });
     if (!res.ok) throw new Error(`GET /schedule -> ${res.status}`);
     return (await res.json()) || [];
   }
 
   async function fetchStatus() {
-    const res = await fetch(`${API}/status`);
+    const res = await fetch(`${API}/status`, { cache: "no-store" });
     if (!res.ok) return null;
     const data = await res.json();
     return {
@@ -543,11 +544,13 @@ export default function App() {
     setError(null);
     try {
       const [schedule, status] = await Promise.all([fetchSchedule(), fetchStatus()]);
+      const statusSummary = status?.summary || summarizeInterviews(schedule);
       setInterviews(schedule);
+      setLiveSummary(statusSummary);
       setUndoLeft(status?.undoLeft || 0);
       setOperatingDayEnd(status?.operatingDayEnd || "19:00");
       if (captureBaseline) {
-        setBaselineSummary(status?.summary || summarizeInterviews(schedule));
+        setBaselineSummary(statusSummary);
       }
     } catch (e) {
       setError(e.message);
@@ -563,10 +566,12 @@ export default function App() {
       try {
         const [schedule, status] = await Promise.all([fetchSchedule(), fetchStatus()]);
         if (cancelled) return;
+        const statusSummary = status?.summary || summarizeInterviews(schedule);
         setInterviews(schedule);
+        setLiveSummary(statusSummary);
         setUndoLeft(status?.undoLeft || 0);
         setOperatingDayEnd(status?.operatingDayEnd || "19:00");
-        setBaselineSummary(status?.summary || summarizeInterviews(schedule));
+        setBaselineSummary(statusSummary);
       } catch (e) {
         if (!cancelled) setError(e.message);
       } finally {
@@ -628,6 +633,7 @@ export default function App() {
       const after = normalizeBackendSummary(parsed.AfterSummary) || before;
 
       setDiff(parsed);
+      setLiveSummary(after);
       setComparison({ kind, before, after, body });
       setActivity((items) => [
         {
@@ -654,6 +660,10 @@ export default function App() {
       const text = await res.text();
       if (!res.ok) throw new Error(text || `POST /undo -> ${res.status}`);
       const parsed = JSON.parse(text);
+      const restoredSummary = normalizeBackendSummary(parsed.Summary);
+      if (restoredSummary) {
+        setLiveSummary(restoredSummary);
+      }
       setUndoLeft(parsed.UndoLeft || 0);
       setDiff(null);
       setComparison(null);
@@ -674,10 +684,11 @@ export default function App() {
     }
   }
 
-  const currentSummary = useMemo(
+  const rowSummary = useMemo(
     () => summarizeInterviews(interviews),
     [interviews]
   );
+  const currentSummary = liveSummary || rowSummary;
 
   const optionLists = useMemo(() => {
     const scheduled = interviews.filter((iv) => iv.Status === STATUS.Scheduled);

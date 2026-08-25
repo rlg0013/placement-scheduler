@@ -6,8 +6,8 @@ import (
 	"sort"
 	"time"
 
-	"placement-scheduler/internal/models"
-	"placement-scheduler/internal/scheduler"
+	"placement-scheduler/pkg/models"
+	"placement-scheduler/pkg/scheduler"
 )
 
 // ---------- Disruption: sealed interface, one concrete type per kind ----------

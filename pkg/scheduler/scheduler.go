@@ -5,7 +5,7 @@ import (
 	"sort"
 	"time"
 
-	"placement-scheduler/internal/models"
+	"placement-scheduler/pkg/models"
 )
 
 // PriorityRank converts a company tier into a sortable priority.

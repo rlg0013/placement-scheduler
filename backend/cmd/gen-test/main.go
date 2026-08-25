@@ -5,7 +5,7 @@ import (
 	"sort"
 	"time"
 
-	"placement-scheduler/internal/generator"
+	"placement-scheduler/pkg/generator"
 )
 
 func main() {

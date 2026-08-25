@@ -4,9 +4,9 @@ import (
 	"testing"
 	"time"
 
-	"placement-scheduler/internal/generator"
-	"placement-scheduler/internal/models"
-	"placement-scheduler/internal/scheduler"
+	"placement-scheduler/pkg/generator"
+	"placement-scheduler/pkg/models"
+	"placement-scheduler/pkg/scheduler"
 )
 
 func TestReplansMaintainInvariantsAndScopedDisruptions(t *testing.T) {

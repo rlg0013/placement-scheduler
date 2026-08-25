@@ -6,10 +6,10 @@ import (
 	"sort"
 	"time"
 
-	"placement-scheduler/internal/generator"
-	"placement-scheduler/internal/models"
-	"placement-scheduler/internal/replan"
-	"placement-scheduler/internal/scheduler"
+	"placement-scheduler/pkg/generator"
+	"placement-scheduler/pkg/models"
+	"placement-scheduler/pkg/replan"
+	"placement-scheduler/pkg/scheduler"
 )
 
 // ---------- duplicated from cmd/scheduler-test/main.go (package main

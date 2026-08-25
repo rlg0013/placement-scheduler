@@ -6,9 +6,9 @@ import (
 	"sync"
 	"time"
 
-	"placement-scheduler/internal/models"
-	"placement-scheduler/internal/replan"
-	"placement-scheduler/internal/scheduler"
+	"placement-scheduler/pkg/models"
+	"placement-scheduler/pkg/replan"
+	"placement-scheduler/pkg/scheduler"
 )
 
 type Server struct {
@@ -50,6 +50,7 @@ func withCORS(next http.Handler) http.Handler {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Set("Cache-Control", "no-store")
 
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusOK)

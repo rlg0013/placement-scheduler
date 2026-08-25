@@ -7,7 +7,7 @@ import (
 	"sort"
 	"time"
 
-	"placement-scheduler/internal/models"
+	"placement-scheduler/pkg/models"
 )
 
 // Config controls the scale and shape of the generated placement week.
@@ -276,11 +276,25 @@ func generateShortlists(rng *rand.Rand, companies map[string]models.Company, stu
 		score float64
 	}
 
-	for _, company := range companies {
+	companyIDs := make([]string, 0, len(companies))
+	for id := range companies {
+		companyIDs = append(companyIDs, id)
+	}
+	sort.Strings(companyIDs)
+
+	studentIDs := make([]string, 0, len(students))
+	for id := range students {
+		studentIDs = append(studentIDs, id)
+	}
+	sort.Strings(studentIDs)
+
+	for _, companyID := range companyIDs {
+		company := companies[companyID]
 		profile := profileFor(company.Tier)
 
 		eligible := make([]scored, 0, len(students))
-		for id, s := range students {
+		for _, id := range studentIDs {
+			s := students[id]
 			if s.CGPA >= company.CGPACutoff {
 				noise := rng.NormFloat64() * profile.selectionNoiseStd
 				eligible = append(eligible, scored{id: id, score: s.CGPA + noise})

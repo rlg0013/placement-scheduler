@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"placement-scheduler/internal/replan"
+	"placement-scheduler/pkg/replan"
 )
 
 func TestDisruptionEnvelopeValidation(t *testing.T) {

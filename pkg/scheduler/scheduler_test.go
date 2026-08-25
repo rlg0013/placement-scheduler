@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"placement-scheduler/internal/generator"
-	"placement-scheduler/internal/models"
+	"placement-scheduler/pkg/generator"
+	"placement-scheduler/pkg/models"
 )
 
 func TestGeneratedScheduleMaintainsCoreInvariants(t *testing.T) {

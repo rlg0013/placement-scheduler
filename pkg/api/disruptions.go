@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"placement-scheduler/internal/replan"
+	"placement-scheduler/pkg/replan"
 )
 
 type disruptionEnvelope struct {

@@ -1,228 +1,191 @@
 # Placement Scheduler
 
-A real-time interview scheduling and live replanning system for college placement cells. Built with Go (backend) and React (frontend), this project solves the complex optimization problem of scheduling **800+ students across 35 companies with 20 rooms** over a 4-day placement week — and handles real-time disruptions gracefully.
+A full-stack placement-cell scheduling and live replanning system built for an internship skill assessment. The app generates realistic campus placement data, schedules interviews across limited rooms and panels, and lets a coordinator handle disruptions such as student dropouts, panel dropouts, late companies, and unavailable rooms.
 
-> **Internship Skill Assessment** — Full-stack project demonstrating algorithm design, systems thinking, API design, and UI development.
+**Live demo:** [https://placement-scheduler-two.vercel.app](https://placement-scheduler-two.vercel.app)
 
----
-
-## Screenshots
-
-| Light Mode | Dark Mode |
-|-----------|-----------|
-| ![Dashboard Light](docs/dashboard-light.png) | ![Dashboard Dark](docs/dashboard-dark.png) |
+**Tech stack:** Go 1.22 backend, React 19 frontend, Vite, Vercel Go serverless functions.
 
 ---
 
-## Problem Statement
+## Project Demo
 
-College placement weeks are chaotic. Companies arrive late, panels drop out, rooms become unavailable, and students withdraw — all while hundreds of interviews need to happen in tight time windows. This system:
+### Dashboard Overview
 
-1. **Generates realistic placement data** — companies tiered by hiring volume (mass recruiters, mid-tier, niche), student CGPAs, shortlists, panels, and rooms
-2. **Schedules interviews optimally** using an event-driven matching algorithm with panel room stickiness
-3. **Handles live disruptions** by replanning affected interviews in real-time while preserving invariants
-4. **Provides a control dashboard** for coordinators to trigger disruptions, view diffs, browse records, and undo changes
+The first screen is a coordinator cockpit. It shows the generated placement schedule, scheduled percentage, baseline capacity gaps, disruption-created gaps, undo state, and the disruption form.
 
----
+![Dashboard overview](docs/dashboard-overview.png)
 
-## Example Walkthrough: Late Company Disruption
+### Live Replanning Flow
 
-To demonstrate the replanning engine, here's a concrete scenario:
+In this example, the coordinator chooses student `S0030` and applies a student-dropout disruption. The replan engine cancels that student's interview, compacts later interviews on the same panel, and returns a before/after diff with notification messages.
 
-### Step 1 — Initial Schedule
+![Disruption diff](docs/disruption-diff.png)
 
-The system generates 1,116 scheduled interviews out of 1,457 total. The dashboard shows:
+### Schedule Browser
 
-- **Total**: 1,457 students
-- **Scheduled**: 1,116 interviews across 4 days
-- **Unscheduled**: 341 (ran out of time in wave)
+The lower section is a searchable, paginated schedule browser. It lets the coordinator inspect affected rows by student, company, panel, room, status, or unscheduled reason.
 
-### Step 2 — Trigger a Disruption
+![Schedule browser](docs/schedule-browser.png)
 
-A coordinator triggers a **Late Company** disruption via the API:
+### Dark Mode
 
-```json
-{
-  "kind": "late_company",
-  "at": "2026-09-01T10:00:00+05:30",
-  "company_id": "MASS-01",
-  "delay_minutes": 120
-}
-```
+The UI also supports persisted light/dark mode, plus a `?theme=dark|light` URL override for demos and screenshots.
 
-MASS-01 (a mass recruiter with 4 panels) was supposed to start at 8:00 AM but arrives at 10:00 AM — a 2-hour delay.
-
-### Step 3 — Replanning Engine Responds
-
-The replan engine:
-
-1. **Clones** the full schedule state (safe mutation)
-2. **Removes** all MASS-01 interviews before 10:00 AM
-3. **Re-runs** `RunMatching()` from the arrival time
-4. **Compresses** idle gaps left by the delayed panels
-5. **Commits** the new schedule and produces a `Diff`
-
-### Step 4 — Review the Result
-
-The dashboard shows the diff:
-
-| Metric | Before | After |
-|--------|--------|-------|
-| Scheduled | 1,116 | 1,071 |
-| Unscheduled | 341 | 386 |
-| New Unscheduled Reason | — | "company delay left no remaining capacity" (45) |
-
-**45 students** couldn't be rescheduled because the 2-hour delay consumed the remaining capacity in the morning wave. Each affected student gets a notification:
-
-```
-"your interview could not be rescheduled today due to a company delay"
-```
-
-### Step 5 — Undo
-
-If the coordinator decides this was a mistake, they can roll back:
-
-```bash
-curl -X POST http://localhost:8080/undo
-```
-
-The schedule reverts to the exact pre-disruption state.
+![Dark mode dashboard](docs/dashboard-dark.png)
 
 ---
 
-## Architecture
+## What Problem This Solves
 
-```
+College placement weeks are hard to coordinate because many constraints move at the same time:
+
+- Hundreds of students may be shortlisted by overlapping companies.
+- Companies have different interview durations, panel counts, CGPA cutoffs, and day preferences.
+- Rooms are limited and cannot be double-booked.
+- A student cannot attend two interviews at the same time.
+- A panel should stay in the same room for its working day.
+- Real disruptions must be handled without rebuilding the entire plan manually.
+
+This project models that situation as a scheduling and replanning problem. It starts from synthetic but realistic input data, produces a baseline schedule, then keeps the schedule editable through safe replan operations.
+
+---
+
+## Core Functionality
+
+| Area | What it does |
+| --- | --- |
+| Data generation | Creates 800 students, 35 companies, company panels, 20 rooms, CGPA cutoffs, and shortlists. |
+| Baseline scheduling | Runs event-driven matching wave by wave and creates scheduled or explicitly unscheduled interview records. |
+| Replanning | Applies live disruptions while preserving existing constraints as much as possible. |
+| Diff reporting | Shows before/after slot changes and notification targets for students, panels, or coordinators. |
+| Undo | Stores recent schedule snapshots and rolls back the last disruption. |
+| Dashboard | Provides metrics, disruption controls, activity logs, search, filters, pagination, and theme switching. |
+| Live deployment | Serves the React app and Go API together on Vercel. |
+
+---
+
+## System Design
+
+```text
 placement-scheduler/
-├── backend/                          # Go 1.22 backend
-│   ├── cmd/
-│   │   ├── server/main.go            # HTTP API server (port 8080)
-│   │   ├── scheduler-test/main.go    # Scheduler invariant validation
-│   │   ├── replan-test/main.go       # Replan engine invariant validation
-│   │   └── gen-test/main.go          # Data generation analysis
-│   └── internal/
-│       ├── models/models.go          # Core domain types
-│       ├── generator/generator.go    # Synthetic data generator
-│       ├── scheduler/scheduler.go    # Event-driven scheduling engine
-│       ├── replan/
-│       │   ├── replan.go             # 4 disruption handlers
-│       │   └── dispatch.go           # Disruption type router
-│       └── api/
-│           ├── handlers.go           # HTTP endpoints
-│           ├── disruptions.go        # Request parsing and validation
-│           └── *_test.go             # API, scheduler, and replan regression tests
-└── frontend/                         # React 19 + Vite frontend
-    └── src/
-        ├── App.jsx                   # Single-page control dashboard
-        ├── ThemeContext.jsx           # Dark/light theme provider
-        ├── main.jsx                  # App entry point
-        └── index.css                 # Global theme tokens
+├── api/
+│   └── index.go                 # Vercel serverless Go entry point
+├── backend/
+│   └── cmd/
+│       ├── server/              # Local API server on :8080
+│       ├── gen-test/            # Data generation inspection command
+│       ├── scheduler-test/      # Scheduler invariant command
+│       └── replan-test/         # Replan invariant command
+├── pkg/
+│   ├── api/                     # HTTP handlers and request validation
+│   ├── bootstrap/               # Shared app initialization for local + Vercel
+│   ├── generator/               # Synthetic placement data generator
+│   ├── models/                  # Domain models
+│   ├── replan/                  # Disruption handlers and diff model
+│   └── scheduler/               # Event-driven scheduling engine
+├── frontend/
+│   └── src/
+│       ├── App.jsx              # Main dashboard
+│       ├── ThemeContext.jsx     # Theme state and persistence
+│       └── App.css              # Responsive styling
+├── docs/                        # README screenshots
+└── vercel.json                  # Frontend build + API rewrites
 ```
+
+The `pkg/bootstrap` package is shared by both `backend/cmd/server` and `api/index.go`, so local development and the deployed Vercel function initialize the same application logic.
 
 ---
 
-## Key Features
+## Scheduling Logic
 
-### Data Generator (`generator.go`)
+The scheduler is built around waves. A wave is a set of companies that share the same interview window.
 
-Generates realistic placement week data with configurable parameters:
+1. Companies are grouped by `(day, start, end)`.
+2. Rooms are allocated to panels in two phases.
+3. First, every company gets at least one panel if rooms allow.
+4. Remaining rooms are assigned by priority, shortlist size, and deterministic ID ordering.
+5. A min-heap tracks the next panel to become free.
+6. The scheduler picks the next available student for that company, assigns a room, records the interview, and pushes the panel back into the heap.
+7. If no slot can fit before the wave ends, the record is stored as unscheduled with a reason.
 
-| Parameter | Value | Description |
-|-----------|-------|-------------|
-| Companies | 35 | 8 mass recruiters, 17 mid-tier, 10 niche |
-| Students | 800 | CGPA distributed ~N(7.2, 0.9) |
-| Rooms | 20 | Single-panel rooms |
-| Days | 4 | Sep 1–4, 2026 (IST) |
+Important invariants:
 
-**Company tiers model real-world patterns:**
+- No student is double-booked.
+- No room is double-booked.
+- A panel keeps the same room during its schedule.
+- Every failed placement has an explicit unscheduled reason.
+- The generated data is deterministic from a fixed seed.
 
-| Tier | Panels | Interview Duration | CGPA Cutoff | Shortlisted |
-|------|--------|-------------------|-------------|-------------|
-| Mass Recruiters | 4–6 | 15 min | 5.5–6.5 | 60–90 |
-| Mid-Tier | 2–3 | 25 min | 6.5–7.5 | 30–55 |
-| Niche | 1–2 | 40 min | 7.5–8.8 | 10–18 |
+---
 
-Student selection uses CGPA-weighted noise so top students appear on many overlapping lists — just like real placement season.
+## Replanning Logic
 
-### Scheduling Engine (`scheduler.go`)
+Each disruption uses clone-before-mutate safety. The current schedule is cloned, the disruption is applied, and only the resulting state is committed. The previous state is saved for undo.
 
-Event-driven matching using a **min-heap of panels** ordered by next-free time:
+| Disruption | Input | Replan behavior |
+| --- | --- | --- |
+| Student dropout | `student_id`, `at` | Cancels the student's future interview and compacts later interviews on that panel. |
+| Panel dropout | `panel_id`, `at` | Removes future interviews from that panel and tries to absorb them into surviving company panels. |
+| Late company | `company_id`, `delay_minutes`, `at` | Pulls the company's future interviews back into a queue and re-runs matching from the delayed arrival time. |
+| Room unavailable | `room_id`, `at` | Finds replacement room capacity per affected panel and rematches displaced interviews. |
 
-1. **Wave building**: Companies sharing the same `(day, start, end)` window are grouped into waves
-2. **Panel admission**: Two-phase room allocation — guarantee one panel per company, then fill remaining rooms by priority
-3. **Matching loop**: For each freed panel, find the next available student and room, book the interview, push the panel back with its new free time
-4. **Room stickiness**: A panel stays in the same physical room for its entire day
-
-**Invariants maintained:**
-- No student double-booking
-- No room double-booking
-- Panel room stickiness (one panel = one room per day)
-
-### Replanning Engine (`replan.go`)
-
-Handles 4 disruption types with clone-before-mutate safety:
-
-| Disruption | What Happens | Strategy |
-|------------|-------------|----------|
-| **Student Dropout** | Cancel one interview | Compact later interviews on same panel forward |
-| **Panel Dropout** | Remove one panel | Absorb displaced students into surviving panels |
-| **Late Company** | Company arrives late | Re-derive schedule from arrival time, compress idle gaps |
-| **Room Unavailable** | Room goes offline | Find replacement room per panel, re-match displaced students |
-
-### Frontend Dashboard (`App.jsx`)
-
-Single-page control console with dark/light mode support:
-
-- **Overview**: Live metrics (total, scheduled, gaps)
-- **Act**: Form and QuickPick selector to trigger any of the 4 disruption types
-- **Review**: Before/after diff log with notification targets and reason breakdowns
-- **Inspect**: Paginated, filterable table of all 1,400+ interviews
-- **Undo**: Roll back to previous state
-
-**Theme system**: `ThemeContext` with `localStorage` persistence and `?theme=dark|light` URL parameter override for screenshots.
+The returned `Diff` includes the cause, changed students, before slot, after slot, notification messages, and before/after schedule summaries.
 
 ---
 
 ## API Reference
 
+Local API base URL:
+
+```text
+http://localhost:8080
+```
+
+Live API base URL:
+
+```text
+https://placement-scheduler-two.vercel.app/api
+```
+
 | Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/schedule` | Returns all interview records |
-| `GET` | `/status` | Returns summary, undo count, operating hours |
-| `POST` | `/disruptions` | Apply a disruption (triggers replan) |
-| `POST` | `/undo` | Roll back last disruption |
+| --- | --- | --- |
+| `GET` | `/status` | Current counts, unscheduled reasons, undo count, and operating cutoff. |
+| `GET` | `/schedule` | Full interview record list. |
+| `POST` | `/disruptions` | Applies one disruption and returns a diff. |
+| `POST` | `/undo` | Restores the previous schedule snapshot. |
 
-### Disruption Types
+### Example: Student Dropout
 
-**Student Dropout**
-```json
-{
-  "kind": "student_dropout",
-  "at": "2026-09-01T10:30:00+05:30",
-  "student_id": "S0042"
-}
+```bash
+curl -X POST https://placement-scheduler-two.vercel.app/api/disruptions \
+  -H "Content-Type: application/json" \
+  -d "{\"kind\":\"student_dropout\",\"at\":\"2026-09-01T09:00:00+05:30\",\"student_id\":\"S0030\"}"
 ```
 
-**Panel Dropout**
-```json
-{
-  "kind": "panel_dropout",
-  "at": "2026-09-02T14:00:00+05:30",
-  "panel_id": "MID-05-P2"
-}
-```
+### Example: Late Company
 
-**Late Company**
 ```json
 {
   "kind": "late_company",
-  "at": "2026-09-01T10:00:00+05:30",
+  "at": "2026-09-01T09:00:00+05:30",
   "company_id": "MASS-01",
   "delay_minutes": 120
 }
 ```
 
-**Room Unavailable**
+### Example: Panel Dropout
+
+```json
+{
+  "kind": "panel_dropout",
+  "at": "2026-09-02T09:00:00+05:30",
+  "panel_id": "MID-05-P2"
+}
+```
+
+### Example: Room Unavailable
+
 ```json
 {
   "kind": "room_unavailable",
@@ -231,100 +194,101 @@ Single-page control console with dark/light mode support:
 }
 ```
 
-All requests are validated before reaching the replan engine. Missing fields, unknown disruption kinds, and non-positive delays return `400 Bad Request`.
-
 ---
 
-## Getting Started
+## How To Run Locally
 
 ### Prerequisites
+
 - Go 1.22+
 - Node.js 18+
 
 ### Backend
+
+From the repository root:
+
 ```bash
-cd backend
-go run ./cmd/server          # Starts API on :8080
-go test ./...                # Run all tests
-go vet ./...                 # Static analysis
-go run ./cmd/scheduler-test  # Validate scheduling invariants
-go run ./cmd/replan-test     # Validate replanning invariants
+go run ./backend/cmd/server
+```
+
+The API starts at:
+
+```text
+http://localhost:8080
 ```
 
 ### Frontend
+
+In another terminal:
+
 ```bash
 cd frontend
 npm install
-npm run dev    # Starts Vite dev server on :5173
-npm run lint   # ESLint checks
-npm run build  # Production build
+npm run dev
 ```
 
----
+The UI starts at:
 
-## Tech Stack
+```text
+http://localhost:5173
+```
 
-| Layer | Technology |
-|-------|-----------|
-| Backend | Go 1.22, `net/http`, `container/heap` |
-| Frontend | React 19, Vite 8, CSS Variables |
-| Styling | Dark/light theme, glass morphism, gradient backgrounds |
-| Data | Synthetic generator (seeded RNG) |
-| Timezone | IST (UTC+5:30) throughout |
-
----
-
-## Design Decisions
-
-1. **Event-driven matching over greedy assignment**: The min-heap approach naturally handles panels becoming free at different times, avoiding the pitfalls of fixed-time-slot assignment.
-
-2. **Room stickiness as a first-class invariant**: Real panels don't move rooms mid-day. The scheduler enforces this via `panelRoom` map rather than treating it as a soft preference.
-
-3. **Clone-before-mutate for replanning**: Every replan clones the full state, attempts the change, and only commits if successful. This enables safe undo without complex rollback logic.
-
-4. **IST internally**: All `time.Time` values use IST for correct 7 PM operating cutoff behavior. The frontend sends `+05:30` offsets.
-
-5. **Priority tiers model real placement dynamics**: Niche companies (highest priority, fewest students) get scheduled first when there's contention, mirroring how real placement cells protect high-value recruiters.
+For production builds, the frontend automatically calls `/api`; during local development it calls `http://localhost:8080`.
 
 ---
 
 ## Validation
 
-### Automated Tests
+Commands used to verify the project:
 
 ```bash
-# Backend
-go test ./...         # API, scheduler, replan tests
-go vet ./...          # Static analysis
-
-# Scheduler invariants
-go run ./cmd/scheduler-test
-# ✅ Student double-booking check PASSED
-# ✅ Room double-booking check PASSED
-# ✅ Panel room-stickiness check PASSED
-
-# Replan invariants (each disruption type)
-go run ./cmd/replan-test
-# ✅ baseline OK
-# ✅ after StudentDropout OK
-# ✅ after PanelDropout OK
-# ✅ after LateCompany OK
-# ✅ after RoomUnavailable OK
+go test ./pkg/... ./backend/cmd/... ./api
+cd frontend
+npm run lint
+npm run build
 ```
 
-### Frontend
+Additional manual verification:
+
+- Opened the local dashboard in browser.
+- Captured README screenshots from the running app.
+- Applied a student-dropout disruption from the UI.
+- Verified the diff log and schedule browser update.
+- Deployed to Vercel and smoke-tested `/`, `/api/status`, `/api/disruptions`, and `/api/undo`.
+
+---
+
+## Deployment
+
+The project is deployed on Vercel:
+
+[https://placement-scheduler-two.vercel.app](https://placement-scheduler-two.vercel.app)
+
+The Vercel setup uses:
+
+- `frontend/dist` as the static output.
+- `api/index.go` as the Go serverless function.
+- `vercel.json` rewrites so `/api/*` routes reach the backend and all other paths serve the React app.
+
+To deploy again:
 
 ```bash
-npm run lint    # ESLint — zero errors
-npm run build   # Production build — clean
+vercel deploy --prod
 ```
 
-### Manual Verification
+---
 
-The UI was checked in-browser at desktop and mobile widths for console errors and horizontal overflow. Screenshots captured in both light and dark themes.
+## Assessment Highlights
+
+- Demonstrates algorithm design with heap-based event scheduling.
+- Maintains real-world constraints instead of only rendering fake data.
+- Handles disruption scenarios with explicit, reviewable diffs.
+- Separates static input data from mutable schedule state.
+- Provides API validation, tests, and a usable frontend control dashboard.
+- Includes a real hosted demo link for reviewers.
 
 ---
 
 ## License
 
-Developed as an internship skill assessment.
+Developed as an internship skill assessment project.

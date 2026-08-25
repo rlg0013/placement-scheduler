@@ -5,9 +5,9 @@ import (
 	"sort"
 	"time"
 
-	"placement-scheduler/internal/generator"
-	"placement-scheduler/internal/models"
-	"placement-scheduler/internal/scheduler"
+	"placement-scheduler/pkg/generator"
+	"placement-scheduler/pkg/models"
+	"placement-scheduler/pkg/scheduler"
 )
 
 // wavePriority returns the highest-priority company represented in the
