@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
+import { useTheme } from "./ThemeContext.jsx";
+import "./App.css";
 
-const API = "http://localhost:8080";
+const API = import.meta.env.VITE_API_URL || "http://localhost:8080";
 const PAGE_SIZE = 25;
 
 const STATUS = {
@@ -33,9 +35,9 @@ const KIND_FIELDS = {
 
 const FIELD_META = {
   student_id: { label: "Student", placeholder: "Type or pick S0001", list: "student-options" },
-  panel_id: { label: "Panel", placeholder: "Type or pick P-C03-01", list: "panel-options" },
-  company_id: { label: "Company", placeholder: "Type or pick C03", list: "company-options" },
-  room_id: { label: "Room", placeholder: "Type or pick R04", list: "room-options" },
+  panel_id: { label: "Panel", placeholder: "Type or pick MASS-01-P1", list: "panel-options" },
+  company_id: { label: "Company", placeholder: "Type or pick MASS-01", list: "company-options" },
+  room_id: { label: "Room", placeholder: "Type or pick R01", list: "room-options" },
   delay_minutes: { label: "Delay minutes", placeholder: "e.g. 90" },
 };
 
@@ -179,7 +181,324 @@ function buildDiffSummary(diff, kind) {
   return `${KIND_LABELS[kind] || "Disruption"}: ${pieces.join(", ")}.`;
 }
 
+/* ---------- Small presentational components ---------- */
+
+function Metric({ label, value, tone, icon }) {
+  return (
+    <div className="hover-lift" style={{ ...styles.metric, ...metricAccent(tone) }}>
+      <div style={styles.metricTop}>
+        <span style={{ ...styles.metricIcon, background: toneGlow(tone) }}>{icon}</span>
+        <span style={{ ...styles.metricValue, color: toneColor(tone) }}>{value}</span>
+      </div>
+      <div style={styles.metricLabel}>{label}</div>
+    </div>
+  );
+}
+
+function DeltaMetric({ label, before, after, tone }) {
+  const delta = after - before;
+  return (
+    <div style={styles.deltaMetric}>
+      <span style={styles.metricLabel}>{label}</span>
+      <div style={styles.deltaFlow}>
+        <strong>{before}</strong>
+        <span style={styles.deltaArrow}>→</span>
+        <strong style={{ color: toneColor(tone) }}>{after}</strong>
+      </div>
+      <div style={{ ...styles.deltaText, color: toneColor(tone) }}>
+        {signedDelta(delta)} in latest action
+      </div>
+    </div>
+  );
+}
+
+function ReasonBreakdown({ before, after, showDelta }) {
+  const reasons = new Set([
+    ...Object.keys(before?.UnscheduledReasons || {}),
+    ...Object.keys(after?.UnscheduledReasons || {}),
+  ]);
+  const rows = showDelta
+    ? [...reasons]
+        .map((reason) => ({
+          reason,
+          before: before?.UnscheduledReasons?.[reason] || 0,
+          after: after?.UnscheduledReasons?.[reason] || 0,
+        }))
+        .sort((a, b) => b.after - a.after || a.reason.localeCompare(b.reason))
+    : sortedReasonRows(after || before).map(([reason, count]) => ({
+        reason,
+        before: count,
+        after: count,
+      }));
+
+  return (
+    <div style={styles.reasonBox}>
+      <div style={styles.reasonHeader}>
+        <h3 style={styles.h3}>Unscheduled Reasons</h3>
+        <span style={styles.smallCaps}>{showDelta ? "Before / after" : "Current snapshot"}</span>
+      </div>
+      {rows.length === 0 ? (
+        <div style={styles.emptyState}>No unscheduled interviews.</div>
+      ) : (
+        <div style={styles.reasonRows}>
+          {rows.map((row) => {
+            const original = isOriginalCapacityGap(row.reason);
+            const delta = row.after - row.before;
+            return (
+              <div key={row.reason} style={styles.reasonRow}>
+                <span style={original ? styles.reasonDotOriginal : styles.reasonDotDisruption} />
+                <span style={styles.reasonText}>{row.reason}</span>
+                <span style={original ? styles.reasonLabelOriginal : styles.reasonLabelDisruption}>
+                  {original ? "Original gap" : "Disruption"}
+                </span>
+                <strong>
+                  {showDelta
+                    ? `${row.before} → ${row.after} (${signedDelta(delta)})`
+                    : row.after}
+                </strong>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DiffCard({ change, index }) {
+  const notify = change.Notify || [];
+  return (
+    <div className="hover-lift" style={styles.diffCard}>
+      <div style={styles.diffTopLine}>
+        <div>
+          <span style={styles.smallCaps}>Change {index + 1}</span>
+          <h3 style={styles.diffTitle}>{change.StudentID || "Coordination event"}</h3>
+        </div>
+        <span style={slotEmpty(change.After) ? styles.outcomeCancelled : styles.outcomeMoved}>
+          {slotEmpty(change.After) ? "✕ Unscheduled" : "↻ Rescheduled"}
+        </span>
+      </div>
+      <div style={styles.slotCompare}>
+        <SlotBlock title="Before" slot={change.Before} />
+        <div style={styles.compareArrow}>→</div>
+        <SlotBlock title="After" slot={change.After} />
+      </div>
+      {notify.length > 0 && (
+        <div style={styles.notifyRow}>
+          {notify.map((target, i) => (
+            <NotifyChip target={target} key={`${target.Kind}-${target.ID}-${i}`} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SlotBlock({ title, slot }) {
+  const empty = slotEmpty(slot);
+  return (
+    <div style={empty ? styles.slotBlockEmpty : styles.slotBlock}>
+      <span style={styles.slotTitle}>{title}</span>
+      {empty ? (
+        <strong>Unscheduled</strong>
+      ) : (
+        <>
+          <strong>{slot.PanelID || "-"} / {slot.RoomID || "-"}</strong>
+          <span>{fmtTime(slot.At)}</span>
+        </>
+      )}
+    </div>
+  );
+}
+
+function NotifyChip({ target }) {
+  const stylesByKind = {
+    student: styles.notifyStudent,
+    panel: styles.notifyPanel,
+    coordinator: styles.notifyCoordinator,
+  };
+  const marker = {
+    student: "STU",
+    panel: "PAN",
+    coordinator: "CO",
+  };
+  return (
+    <span style={{ ...styles.notifyChip, ...(stylesByKind[target.Kind] || styles.notifyCoordinator) }}>
+      <strong>{marker[target.Kind] || "MSG"}</strong>
+      {target.ID ? ` ${target.ID}: ` : " "}
+      {target.Message}
+    </span>
+  );
+}
+
+function StatusBadge({ interview }) {
+  if (interview.Status === STATUS.Scheduled) {
+    return <span style={styles.badgeScheduled}>Scheduled</span>;
+  }
+  if (interview.Status === STATUS.Cancelled) {
+    return <span style={styles.badgeCancelled}>Cancelled</span>;
+  }
+  if (unscheduledCategory(interview) === "original_gap") {
+    return <span style={styles.badgeOriginal}>Original gap</span>;
+  }
+  return <span style={styles.badgeDisruption}>Disruption gap</span>;
+}
+
+function QuickPick({ interviews, kind, onSelect }) {
+  const scheduled = interviews.filter((iv) => iv.Status === STATUS.Scheduled);
+
+  let items = [];
+  let hint = "";
+  if (kind === "student_dropout") {
+    hint = "Students with scheduled interviews";
+    const byStudent = {};
+    scheduled.forEach((iv) => {
+      if (!byStudent[iv.StudentID]) byStudent[iv.StudentID] = [];
+      byStudent[iv.StudentID].push(iv);
+    });
+    items = Object.entries(byStudent)
+      .map(([sid, ivs]) => {
+        const iv = ivs[0];
+        return {
+          id: sid,
+          main: sid,
+          sub: `${iv.CompanyID} · ${iv.PanelID} · ${iv.RoomID}`,
+          time: fmtTime(iv.StartTime),
+          data: { student_id: sid },
+        };
+      })
+      .sort((a, b) => a.main.localeCompare(b.main));
+  } else if (kind === "panel_dropout") {
+    hint = "Active panels";
+    const byPanel = {};
+    scheduled.forEach((iv) => {
+      if (!byPanel[iv.PanelID]) byPanel[iv.PanelID] = { company: iv.CompanyID, count: 0, rooms: new Set() };
+      byPanel[iv.PanelID].count++;
+      byPanel[iv.PanelID].rooms.add(iv.RoomID);
+    });
+    items = Object.entries(byPanel)
+      .map(([pid, info]) => ({
+        id: pid,
+        main: pid,
+        sub: `${info.company} · ${info.count} interviews · Room ${[...info.rooms].join(", ")}`,
+        time: "",
+        data: { panel_id: pid },
+      }))
+      .sort((a, b) => a.main.localeCompare(b.main));
+  } else if (kind === "room_unavailable") {
+    hint = "Rooms in use";
+    const byRoom = {};
+    scheduled.forEach((iv) => {
+      if (!byRoom[iv.RoomID]) byRoom[iv.RoomID] = { panels: new Set(), count: 0 };
+      byRoom[iv.RoomID].panels.add(iv.PanelID);
+      byRoom[iv.RoomID].count++;
+    });
+    items = Object.entries(byRoom)
+      .map(([rid, info]) => ({
+        id: rid,
+        main: rid,
+        sub: `${info.count} interviews · ${info.panels.size} panels`,
+        time: "",
+        data: { room_id: rid },
+      }))
+      .sort((a, b) => a.main.localeCompare(b.main));
+  } else if (kind === "late_company") {
+    hint = "Companies on-site today";
+    const byCompany = {};
+    scheduled.forEach((iv) => {
+      if (!byCompany[iv.CompanyID]) byCompany[iv.CompanyID] = { count: 0, panels: new Set(), earliest: iv.StartTime };
+      byCompany[iv.CompanyID].count++;
+      byCompany[iv.CompanyID].panels.add(iv.PanelID);
+    });
+    items = Object.entries(byCompany)
+      .map(([cid, info]) => ({
+        id: cid,
+        main: cid,
+        sub: `${info.count} interviews · ${info.panels.size} panels`,
+        time: fmtTime(info.earliest),
+        data: { company_id: cid },
+      }))
+      .sort((a, b) => a.main.localeCompare(b.main));
+  }
+
+  if (items.length === 0) return null;
+
+  return (
+    <div style={styles.quickPick}>
+      <div style={styles.quickPickHeader}>
+        <span>{hint}</span>
+        <span style={styles.quickPickCount}>{items.length}</span>
+      </div>
+      <div style={styles.quickPickList}>
+        {items.map((item) => (
+          <button
+            type="button"
+            key={item.id}
+            onClick={() => onSelect(item.data)}
+            style={styles.quickPickItem}
+          >
+            <span style={styles.quickPickMain}>{item.main}</span>
+            <span style={styles.quickPickSub}>{item.sub}</span>
+            {item.time ? (
+              <span style={styles.quickPickTime}>{item.time}</span>
+            ) : (
+              <span style={styles.quickPickChevron}>→</span>
+            )}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ThemeToggle() {
+  const { theme, toggleTheme } = useTheme();
+  return (
+    <button
+      onClick={toggleTheme}
+      style={styles.themeToggle}
+      aria-label={`Switch to ${theme === "light" ? "dark" : "light"} mode`}
+      title={`Switch to ${theme === "light" ? "dark" : "light"} mode`}
+    >
+      <span style={styles.themeToggleIcon}>{theme === "light" ? "☾" : "☀"}</span>
+      <span style={styles.themeToggleLabel}>{theme === "light" ? "Dark" : "Light"}</span>
+    </button>
+  );
+}
+
+/* ---------- Tone helpers ---------- */
+
+function toneColor(tone) {
+  return {
+    good: "var(--success)",
+    warn: "var(--warning)",
+    bad: "var(--danger)",
+    neutral: "var(--primary)",
+  }[tone] || "var(--primary)";
+}
+
+function toneGlow(tone) {
+  return {
+    good: "var(--success-glow)",
+    warn: "var(--warning-glow)",
+    bad: "var(--danger-glow)",
+    neutral: "var(--shadow-glow)",
+  }[tone] || "var(--shadow-glow)";
+}
+
+function metricAccent(tone) {
+  return {
+    good: { borderTopColor: "var(--success)" },
+    warn: { borderTopColor: "var(--warning)" },
+    bad: { borderTopColor: "var(--danger)" },
+    neutral: { borderTopColor: "var(--primary)" },
+  }[tone] || { borderTopColor: "var(--primary)" };
+}
+
+/* ---------- Main App ---------- */
+
 export default function App() {
+  const { theme } = useTheme();
   const [interviews, setInterviews] = useState([]);
   const [baselineSummary, setBaselineSummary] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -263,6 +582,20 @@ export default function App() {
 
   function handleFieldChange(name, value) {
     setFields((f) => ({ ...f, [name]: value }));
+  }
+
+  function handleQuickSelect(data) {
+    setFields((f) => ({ ...f, ...data }));
+    if (kind === "student_dropout" && data.student_id) {
+      const iv = interviews.find(
+        (i) => i.StudentID === data.student_id && i.Status === STATUS.Scheduled
+      );
+      if (iv) {
+        const d = new Date(iv.StartTime);
+        const pad = (n) => String(n).padStart(2, "0");
+        setAt(`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`);
+      }
+    }
   }
 
   async function submitDisruption(e) {
@@ -402,9 +735,12 @@ export default function App() {
   };
   const affectedInterviewCount = (diff?.Changes || []).filter((change) => change.StudentID).length;
   const coordinationChangeCount = (diff?.Changes?.length || 0) - affectedInterviewCount;
+  const scheduleRate = currentSummary.Total > 0
+    ? Math.round((currentSummary.Scheduled / currentSummary.Total) * 100)
+    : 0;
 
   return (
-    <div style={styles.page}>
+    <div style={styles.page} data-theme={theme}>
       <datalist id="student-options">
         {optionLists.students.map((id) => <option value={id} key={id} />)}
       </datalist>
@@ -418,56 +754,77 @@ export default function App() {
         {optionLists.rooms.map((id) => <option value={id} key={id} />)}
       </datalist>
 
+      {/* Ambient background orbs */}
+      <div style={styles.orb} className="orb orb-1" />
+      <div style={styles.orb} className="orb orb-2" />
+      <div style={styles.orb} className="orb orb-3" />
+
       <header style={styles.hero}>
-        <div style={styles.brandLockup}>
-          <div style={styles.brandMark}>PS</div>
-          <div>
-            <div style={styles.eyebrow}>Live replanning console</div>
-            <h1 style={styles.h1}>PlacementOps Control</h1>
-            <p style={styles.subhead}>
-              Defend the placement week with scoped replans, audit-ready diffs, and stable operating cutoffs.
-            </p>
+        <div style={styles.heroContent}>
+          <div style={styles.heroBadge}>
+            <span style={styles.pulseDot} />
+            Live replanning defense console
           </div>
+          <h1 style={styles.h1}>PlacementOps Control</h1>
+          <p style={styles.subhead}>
+            A scheduling cockpit that separates baseline capacity gaps from disruption-driven change —
+            800 students · 35 companies · 20 rooms · hard 7&nbsp;PM cutoff.
+          </p>
         </div>
         <div style={styles.heroActions}>
           <button onClick={() => loadSchedule()} style={styles.secondaryButton}>
-            Refresh
+            ⟳ Refresh
           </button>
           <button
             onClick={undoLastDisruption}
             disabled={undoing || undoLeft === 0}
             style={{
               ...styles.undoButton,
-              opacity: undoing || undoLeft === 0 ? 0.5 : 1,
+              opacity: undoing || undoLeft === 0 ? 0.45 : 1,
               cursor: undoing || undoLeft === 0 ? "not-allowed" : "pointer",
             }}
           >
-            {undoing ? "Undoing..." : `Undo last (${undoLeft})`}
+            ↩ {undoing ? "Undoing…" : `Undo (${undoLeft})`}
           </button>
+          <ThemeToggle />
         </div>
       </header>
 
-      <div style={styles.shell}>
-        <aside style={styles.navRail}>
-          <a style={styles.navItem} href="#overview">Overview</a>
-          <a style={styles.navItem} href="#disruptions">Act</a>
-          <a style={styles.navItem} href="#browser">Inspect</a>
-        </aside>
-
       <main style={styles.main}>
-        <section id="overview" style={styles.section}>
+        {/* ---------- Overview ---------- */}
+        <section className="animate-slide-up" style={styles.section}>
           <div style={styles.sectionHeader}>
             <div>
-              <span style={styles.moduleLabel}>01 / Overview</span>
               <h2 style={styles.h2}>Schedule Overview</h2>
               <p style={styles.muted}>Current backend state, with unscheduled categories split by origin.</p>
             </div>
+            <div style={styles.rateRing}>
+              <svg width="64" height="64" viewBox="0 0 64 64">
+                <circle cx="32" cy="32" r="26" fill="none" stroke="var(--border)" strokeWidth="7" />
+                <circle
+                  cx="32" cy="32" r="26" fill="none"
+                  stroke="url(#ringGrad)" strokeWidth="7" strokeLinecap="round"
+                  strokeDasharray={`${(scheduleRate / 100) * 163.4} 163.4`}
+                  transform="rotate(-90 32 32)"
+                />
+                <defs>
+                  <linearGradient id="ringGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" stopColor="var(--primary)" />
+                    <stop offset="100%" stopColor="var(--success)" />
+                  </linearGradient>
+                </defs>
+              </svg>
+              <div style={styles.rateLabel}>
+                <strong style={styles.rateNumber}>{scheduleRate}%</strong>
+                <span style={styles.rateCaption}>scheduled</span>
+              </div>
+            </div>
           </div>
           <div style={styles.statGrid}>
-            <Metric label="Total records" value={currentSummary.Total} tone="neutral" />
-            <Metric label="Scheduled" value={currentSummary.Scheduled} tone="good" />
-            <Metric label="Original capacity gaps" value={currentSummary.OriginalUnscheduled} tone="warn" />
-            <Metric label="Disruption-created gaps" value={currentSummary.DisruptionUnscheduled} tone="bad" />
+            <Metric label="Total records" value={currentSummary.Total} tone="neutral" icon="#" />
+            <Metric label="Scheduled" value={currentSummary.Scheduled} tone="good" icon="✓" />
+            <Metric label="Original capacity gaps" value={currentSummary.OriginalUnscheduled} tone="warn" icon="!" />
+            <Metric label="Disruption-created gaps" value={currentSummary.DisruptionUnscheduled} tone="bad" icon="⚡" />
           </div>
           <div style={styles.baselineStrip}>
             <span style={styles.pillNeutral}>Page-load baseline</span>
@@ -477,15 +834,15 @@ export default function App() {
           </div>
         </section>
 
-        <section id="disruptions" style={styles.twoColumn}>
-          <div style={styles.section}>
+        {/* ---------- Control + Diff ---------- */}
+        <section style={styles.twoColumn}>
+          <div className="animate-slide-up" style={styles.section}>
             <div style={styles.sectionHeader}>
               <div>
-                <span style={styles.moduleLabel}>02 / Act</span>
                 <h2 style={styles.h2}>Disruption Control</h2>
                 <p style={styles.muted}>{KIND_SUMMARIES[kind]}</p>
                 <div style={styles.cutoffNote}>
-                  Same-day cutoff: <strong>{operatingDayEnd}</strong>. Interviews that cannot fit by then stay unscheduled.
+                  ⏰ Same-day cutoff: <strong>{operatingDayEnd}</strong> IST. Interviews that cannot fit stay unscheduled.
                 </div>
               </div>
             </div>
@@ -502,26 +859,14 @@ export default function App() {
                   }}
                   style={styles.input}
                 >
-                  <option value="student_dropout">Student dropout</option>
-                  <option value="panel_dropout">Panel dropout</option>
-                  <option value="late_company">Late company</option>
-                  <option value="room_unavailable">Room unavailable</option>
+                  <option value="student_dropout">🎓 Student dropout</option>
+                  <option value="panel_dropout">👥 Panel dropout</option>
+                  <option value="late_company">🕐 Late company</option>
+                  <option value="room_unavailable">🚪 Room unavailable</option>
                 </select>
               </label>
 
-              <QuickPick interviews={interviews} kind={kind} onSelect={(data) => {
-                setFields((f) => ({ ...f, ...data }));
-                if (kind === "student_dropout" && data.student_id) {
-                  const iv = interviews.find(
-                    (i) => i.StudentID === data.student_id && i.Status === STATUS.Scheduled
-                  );
-                  if (iv) {
-                    const d = new Date(iv.StartTime);
-                    const pad = (n) => String(n).padStart(2, "0");
-                    setAt(`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`);
-                  }
-                }
-              }} />
+              <QuickPick interviews={interviews} kind={kind} onSelect={handleQuickSelect} />
 
               {KIND_FIELDS[kind].map((name) => {
                 const meta = FIELD_META[name];
@@ -572,7 +917,7 @@ export default function App() {
               )}
 
               <button type="submit" disabled={submitting} style={styles.primaryButton}>
-                {submitting ? "Applying..." : "Apply disruption"}
+                {submitting ? "Applying…" : "⚡ Apply disruption"}
               </button>
             </form>
 
@@ -583,14 +928,12 @@ export default function App() {
             )}
           </div>
 
-          <div style={styles.section}>
+          <div className="animate-slide-up" style={styles.section}>
             <div style={styles.sectionHeader}>
               <div>
-                <span style={styles.moduleLabel}>03 / Review</span>
                 <h2 style={styles.h2}>Activity / Diff Log</h2>
                 <p style={styles.muted}>
-                  The diff below is the full blast radius reported by the replan call.
-                  Replans do not spill into tomorrow; the active day closes at {operatingDayEnd}.
+                  Full blast radius reported by the replan call. Replans never spill into tomorrow; the active day closes at {operatingDayEnd}.
                 </p>
               </div>
             </div>
@@ -647,10 +990,10 @@ export default function App() {
           </div>
         </section>
 
-        <section id="browser" style={styles.section}>
+        {/* ---------- Browser ---------- */}
+        <section className="animate-slide-up" style={styles.section}>
           <div style={styles.sectionHeader}>
             <div>
-              <span style={styles.moduleLabel}>04 / Inspect</span>
               <h2 style={styles.h2}>Schedule Browser</h2>
               <p style={styles.muted}>
                 Paginated view of the current schedule. Filter by student, company, panel, room, or reason.
@@ -658,8 +1001,8 @@ export default function App() {
             </div>
             <div style={styles.browserTools}>
               <input
-                style={{ ...styles.input, width: "min(250px, 100%)" }}
-                placeholder="Search IDs or reasons..."
+                style={{ ...styles.input, width: 250 }}
+                placeholder="🔍 Search IDs or reasons..."
                 value={filter}
                 onChange={(e) => {
                   setFilter(e.target.value);
@@ -682,12 +1025,12 @@ export default function App() {
             </div>
           </div>
 
-          {loading && <div style={styles.emptyState}>Loading schedule...</div>}
+          {loading && <div style={styles.emptyState}>Loading schedule…</div>}
           {error && (
             <div style={styles.errorBox}>
               <strong>Could not load schedule:</strong> {error}
               <div style={{ marginTop: 6, fontSize: 13, opacity: 0.8 }}>
-                Start the backend with <code>go run ./cmd/server</code>.
+                Start the backend with <code style={styles.codeInline}>go run ./cmd/server</code>.
               </div>
             </div>
           )}
@@ -697,7 +1040,7 @@ export default function App() {
               <div style={styles.paginationBar}>
                 <span>
                   Showing {filtered.length === 0 ? 0 : (safePage - 1) * PAGE_SIZE + 1}
-                  -{Math.min(safePage * PAGE_SIZE, filtered.length)} of {filtered.length}
+                  –{Math.min(safePage * PAGE_SIZE, filtered.length)} of {filtered.length}
                 </span>
                 <div style={styles.pageButtons}>
                   <button
@@ -705,15 +1048,15 @@ export default function App() {
                     disabled={safePage === 1}
                     style={styles.pageButton}
                   >
-                    Prev
+                    ← Prev
                   </button>
-                  <strong>Page {safePage} / {pageCount}</strong>
+                  <strong style={styles.pageIndicator}>Page {safePage} / {pageCount}</strong>
                   <button
                     onClick={() => setPage((p) => Math.min(pageCount, p + 1))}
                     disabled={safePage === pageCount}
                     style={styles.pageButton}
                   >
-                    Next
+                    Next →
                   </button>
                 </div>
               </div>
@@ -733,12 +1076,12 @@ export default function App() {
                   </thead>
                   <tbody>
                     {pagedRows.map((iv) => (
-                      <tr key={iv.ID}>
+                      <tr key={iv.ID} style={styles.tableRow}>
                         <td style={styles.tdStrong}>{iv.StudentID || "-"}</td>
                         <td style={styles.td}>{iv.CompanyID || "-"}</td>
                         <td style={styles.td}>{iv.PanelID || "-"}</td>
                         <td style={styles.td}>{iv.RoomID || "-"}</td>
-                        <td style={styles.td}>{fmtTime(iv.StartTime)}</td>
+                        <td style={styles.tdMono}>{fmtTime(iv.StartTime)}</td>
                         <td style={styles.td}>
                           <StatusBadge interview={iv} />
                         </td>
@@ -754,508 +1097,294 @@ export default function App() {
             </>
           )}
         </section>
+
+        <footer style={styles.footer}>
+          PlacementOps — internship skill assessment · Go + React · {new Date().getFullYear()}
+        </footer>
       </main>
-      </div>
     </div>
   );
 }
 
-function Metric({ label, value, tone }) {
-  return (
-    <div style={{ ...styles.metric, borderLeftColor: toneColor(tone) }}>
-      <div style={{ ...styles.metricValue, color: toneColor(tone) }}>{value}</div>
-      <div style={styles.metricLabel}>{label}</div>
-    </div>
-  );
-}
-
-function DeltaMetric({ label, before, after, tone }) {
-  const delta = after - before;
-  return (
-    <div style={styles.deltaMetric}>
-      <span style={styles.metricLabel}>{label}</span>
-      <div style={styles.deltaFlow}>
-        <strong>{before}</strong>
-        <span>-&gt;</span>
-        <strong>{after}</strong>
-      </div>
-      <div style={{ ...styles.deltaText, color: toneColor(tone) }}>
-        {signedDelta(delta)} in latest action
-      </div>
-    </div>
-  );
-}
-
-function ReasonBreakdown({ before, after, showDelta }) {
-  const reasons = new Set([
-    ...Object.keys(before?.UnscheduledReasons || {}),
-    ...Object.keys(after?.UnscheduledReasons || {}),
-  ]);
-  const rows = showDelta
-    ? [...reasons]
-        .map((reason) => ({
-          reason,
-          before: before?.UnscheduledReasons?.[reason] || 0,
-          after: after?.UnscheduledReasons?.[reason] || 0,
-        }))
-        .sort((a, b) => b.after - a.after || a.reason.localeCompare(b.reason))
-    : sortedReasonRows(after || before).map(([reason, count]) => ({
-        reason,
-        before: count,
-        after: count,
-      }));
-
-  return (
-    <div style={styles.reasonBox}>
-      <div style={styles.reasonHeader}>
-        <h3 style={styles.h3}>Unscheduled Reasons</h3>
-        <span style={styles.smallCaps}>{showDelta ? "Before / after" : "Current snapshot"}</span>
-      </div>
-      {rows.length === 0 ? (
-        <div style={styles.emptyState}>No unscheduled interviews.</div>
-      ) : (
-        <div style={styles.reasonRows}>
-          {rows.map((row) => {
-            const original = isOriginalCapacityGap(row.reason);
-            const delta = row.after - row.before;
-            return (
-              <div key={row.reason} style={styles.reasonRow}>
-                <span style={original ? styles.reasonDotOriginal : styles.reasonDotDisruption} />
-                <span style={styles.reasonText}>{row.reason}</span>
-                <span style={original ? styles.reasonLabelOriginal : styles.reasonLabelDisruption}>
-                  {original ? "Original gap" : "Disruption-created"}
-                </span>
-                <strong>
-                  {showDelta
-                    ? `${row.before} -> ${row.after} (${signedDelta(delta)})`
-                    : row.after}
-                </strong>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function DiffCard({ change, index }) {
-  const notify = change.Notify || [];
-  return (
-    <div style={styles.diffCard}>
-      <div style={styles.diffTopLine}>
-        <div>
-          <span style={styles.smallCaps}>Change {index + 1}</span>
-          <h3 style={styles.diffTitle}>{change.StudentID || "Coordination event"}</h3>
-        </div>
-        <span style={slotEmpty(change.After) ? styles.outcomeCancelled : styles.outcomeMoved}>
-          {slotEmpty(change.After) ? "Unscheduled" : "Rescheduled"}
-        </span>
-      </div>
-      <div style={styles.slotCompare}>
-        <SlotBlock title="Before" slot={change.Before} />
-        <div style={styles.compareArrow}>-&gt;</div>
-        <SlotBlock title="After" slot={change.After} />
-      </div>
-      {notify.length > 0 && (
-        <div style={styles.notifyRow}>
-          {notify.map((target, i) => (
-            <NotifyChip target={target} key={`${target.Kind}-${target.ID}-${i}`} />
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function SlotBlock({ title, slot }) {
-  const empty = slotEmpty(slot);
-  return (
-    <div style={empty ? styles.slotBlockEmpty : styles.slotBlock}>
-      <span style={styles.slotTitle}>{title}</span>
-      {empty ? (
-        <strong>Unscheduled</strong>
-      ) : (
-        <>
-          <strong>{slot.PanelID || "-"} / {slot.RoomID || "-"}</strong>
-          <span>{fmtTime(slot.At)}</span>
-        </>
-      )}
-    </div>
-  );
-}
-
-function NotifyChip({ target }) {
-  const stylesByKind = {
-    student: styles.notifyStudent,
-    panel: styles.notifyPanel,
-    coordinator: styles.notifyCoordinator,
-  };
-  const marker = {
-    student: "STU",
-    panel: "PAN",
-    coordinator: "CO",
-  };
-  return (
-    <span style={{ ...styles.notifyChip, ...(stylesByKind[target.Kind] || styles.notifyCoordinator) }}>
-      <strong>{marker[target.Kind] || "MSG"}</strong>
-      {target.ID ? ` ${target.ID}: ` : " "}
-      {target.Message}
-    </span>
-  );
-}
-
-function QuickPick({ interviews, kind, onSelect }) {
-  const scheduled = interviews.filter((iv) => iv.Status === STATUS.Scheduled);
-
-  let items = [];
-  if (kind === "student_dropout") {
-    const byStudent = {};
-    scheduled.forEach((iv) => {
-      if (!byStudent[iv.StudentID]) byStudent[iv.StudentID] = [];
-      byStudent[iv.StudentID].push(iv);
-    });
-    items = Object.entries(byStudent)
-      .map(([sid, ivs]) => {
-        const iv = ivs[0];
-        return {
-          id: sid,
-          main: sid,
-          sub: `${iv.CompanyID} | ${iv.PanelID} | ${iv.RoomID}`,
-          time: fmtTime(iv.StartTime),
-          data: { student_id: sid },
-        };
-      })
-      .sort((a, b) => a.main.localeCompare(b.main));
-  } else if (kind === "panel_dropout") {
-    const byPanel = {};
-    scheduled.forEach((iv) => {
-      if (!byPanel[iv.PanelID]) byPanel[iv.PanelID] = { company: iv.CompanyID, count: 0, rooms: new Set() };
-      byPanel[iv.PanelID].count++;
-      byPanel[iv.PanelID].rooms.add(iv.RoomID);
-    });
-    items = Object.entries(byPanel)
-      .map(([pid, info]) => ({
-        id: pid,
-        main: pid,
-        sub: `${info.company} | ${info.count} interviews | Room ${[...info.rooms].join(",")}`,
-        time: "",
-        data: { panel_id: pid },
-      }))
-      .sort((a, b) => a.main.localeCompare(b.main));
-  } else if (kind === "room_unavailable") {
-    const byRoom = {};
-    scheduled.forEach((iv) => {
-      if (!byRoom[iv.RoomID]) byRoom[iv.RoomID] = { panels: new Set(), count: 0 };
-      byRoom[iv.RoomID].panels.add(iv.PanelID);
-      byRoom[iv.RoomID].count++;
-    });
-    items = Object.entries(byRoom)
-      .map(([rid, info]) => ({
-        id: rid,
-        main: rid,
-        sub: `${info.count} interviews | Panels: ${[...info.panels].slice(0, 3).join(",")}${info.panels.size > 3 ? "..." : ""}`,
-        time: "",
-        data: { room_id: rid },
-      }))
-      .sort((a, b) => a.main.localeCompare(b.main));
-  } else if (kind === "late_company") {
-    const byCompany = {};
-    scheduled.forEach((iv) => {
-      if (!byCompany[iv.CompanyID]) byCompany[iv.CompanyID] = { count: 0, panels: new Set(), earliest: iv.StartTime };
-      byCompany[iv.CompanyID].count++;
-      byCompany[iv.CompanyID].panels.add(iv.PanelID);
-    });
-    items = Object.entries(byCompany)
-      .map(([cid, info]) => ({
-        id: cid,
-        main: cid,
-        sub: `${info.count} interviews | ${info.panels.size} panels`,
-        time: fmtTime(info.earliest),
-        data: { company_id: cid },
-      }))
-      .sort((a, b) => a.main.localeCompare(b.main));
-  }
-
-  if (items.length === 0) return null;
-
-  return (
-    <div style={styles.quickPick}>
-      <div style={styles.quickPickHeader}>Click to select:</div>
-      <div style={styles.quickPickList}>
-        {items.map((item) => (
-          <button
-            type="button"
-            key={item.id}
-            onClick={() => onSelect(item.data)}
-            style={styles.quickPickItem}
-          >
-            <span style={styles.quickPickMain}>{item.main}</span>
-            <span style={styles.quickPickSub}>{item.sub}</span>
-            {item.time && <span style={styles.quickPickTime}>{item.time}</span>}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function StatusBadge({ interview }) {
-  if (interview.Status === STATUS.Scheduled) {
-    return <span style={styles.badgeScheduled}>Scheduled</span>;
-  }
-  if (interview.Status === STATUS.Cancelled) {
-    return <span style={styles.badgeCancelled}>Cancelled</span>;
-  }
-  if (unscheduledCategory(interview) === "original_gap") {
-    return <span style={styles.badgeOriginal}>Original gap</span>;
-  }
-  return <span style={styles.badgeDisruption}>Disruption gap</span>;
-}
-
-function toneColor(tone) {
-  return {
-    good: "#10b981",
-    warn: "#f59e0b",
-    bad: "#ef4444",
-    neutral: "#6366f1",
-  }[tone] || "#6366f1";
-}
+/* ---------- Styles (theme-aware via CSS variables) ---------- */
 
 const styles = {
   page: {
     minHeight: "100vh",
     boxSizing: "border-box",
     padding: 0,
-    background: "#f7f7f4",
-    color: "#171717",
-    fontFamily: "'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif",
+    background: "var(--bg)",
+    color: "var(--text-primary)",
+    fontFamily: "'Inter', system-ui, sans-serif",
     textAlign: "left",
+    position: "relative",
+    overflowX: "hidden",
+  },
+  orb: {
+    position: "absolute",
+    borderRadius: "50%",
+    filter: "blur(90px)",
+    opacity: 0.35,
+    pointerEvents: "none",
+    zIndex: 0,
   },
   hero: {
+    position: "relative",
+    zIndex: 1,
     display: "flex",
     justifyContent: "space-between",
     alignItems: "center",
+    gap: 18,
+    padding: "34px 36px",
+    background: "linear-gradient(120deg, rgba(102,126,234,0.16) 0%, rgba(118,75,162,0.12) 55%, rgba(240,147,251,0.08) 100%)",
+    borderBottom: "1px solid var(--border)",
+    backdropFilter: "blur(10px)",
     flexWrap: "wrap",
-    gap: 24,
-    padding: "22px 32px",
-    background: "#101010",
-    borderBottom: "1px solid #242424",
-    marginBottom: 0,
   },
-  brandLockup: {
-    display: "flex",
-    alignItems: "center",
-    gap: 14,
-    minWidth: 0,
-  },
-  brandMark: {
+  heroBadge: {
     display: "inline-flex",
     alignItems: "center",
-    justifyContent: "center",
-    width: 42,
-    height: 42,
-    borderRadius: 8,
-    background: "#f5f5f0",
-    color: "#111111",
-    fontSize: 13,
-    fontWeight: 900,
-  },
-  eyebrow: {
-    color: "#a3a3a3",
+    gap: 8,
+    padding: "5px 14px",
+    borderRadius: 999,
+    background: "linear-gradient(135deg, rgba(99,102,241,0.18), rgba(139,92,246,0.12))",
+    border: "1px solid var(--primary-200)",
+    color: "var(--primary)",
     fontSize: 11,
     fontWeight: 700,
+    letterSpacing: "1.2px",
     textTransform: "uppercase",
-    letterSpacing: 0,
-    marginBottom: 6,
+    marginBottom: 14,
   },
-  h1: { margin: 0, fontSize: 27, lineHeight: 1.08, fontWeight: 800, color: "#ffffff" },
-  h2: { margin: "5px 0 0", fontSize: 18, fontWeight: 750, color: "#171717" },
-  h3: { margin: 0, fontSize: 13, fontWeight: 700, color: "#404040" },
-  subhead: { margin: "6px 0 0", color: "#d4d4d4", fontSize: 13, lineHeight: 1.45, maxWidth: 680 },
-  muted: { margin: "5px 0 0", color: "#6b6b64", fontSize: 12, lineHeight: 1.45 },
-  mutedTight: { margin: "2px 0 0", color: "#6b6b64", fontSize: 11, lineHeight: 1.35 },
+  pulseDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 999,
+    background: "var(--success)",
+    boxShadow: "0 0 0 3px var(--success-glow)",
+    animation: "pulse 2s infinite",
+  },
+  heroContent: { minWidth: 280 },
+  h1: {
+    margin: 0,
+    fontSize: 34,
+    lineHeight: 1.1,
+    fontWeight: 900,
+    color: "var(--text-primary)",
+    letterSpacing: "-1px",
+    background: "linear-gradient(120deg, var(--text-primary) 30%, var(--primary) 100%)",
+    WebkitBackgroundClip: "text",
+    WebkitTextFillColor: "transparent",
+    backgroundClip: "text",
+  },
+  h2: { margin: 0, fontSize: 17, fontWeight: 800, color: "var(--text-primary)" },
+  h3: { margin: 0, fontSize: 13, fontWeight: 700, color: "var(--text-secondary)" },
+  subhead: { margin: "8px 0 0", color: "var(--text-muted)", fontSize: 13, lineHeight: 1.55, maxWidth: 560 },
+  muted: { margin: "4px 0 0", color: "var(--text-muted)", fontSize: 12, lineHeight: 1.5 },
+  mutedTight: { margin: "2px 0 0", color: "var(--text-muted)", fontSize: 11, lineHeight: 1.4 },
   cutoffNote: {
     display: "inline-flex",
-    gap: 4,
-    marginTop: 8,
-    padding: "5px 10px",
-    borderRadius: 8,
-    background: "#fff7d6",
-    color: "#6f4e00",
+    alignItems: "center",
+    gap: 6,
+    marginTop: 10,
+    padding: "6px 12px",
+    borderRadius: 999,
+    background: "var(--warning-light)",
+    color: "var(--warning-dark)",
     fontSize: 11,
     fontWeight: 600,
-    border: "1px solid #ecd47a",
+    border: "1px solid var(--warning-glow)",
   },
-  heroActions: { display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" },
-  shell: {
-    display: "grid",
-    gridTemplateColumns: "minmax(0, 1fr)",
-    gap: 18,
-    padding: "26px 32px 44px",
-    maxWidth: 1480,
-    margin: "0 auto",
-  },
-  navRail: {
-    display: "flex",
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 6,
-    alignSelf: "start",
-    padding: 8,
-    border: "1px solid #deded7",
-    borderRadius: 8,
-    background: "#ffffff",
-  },
-  navItem: {
-    color: "#52524c",
-    textDecoration: "none",
-    fontSize: 12,
-    fontWeight: 700,
-    borderRadius: 6,
-    padding: "9px 10px",
-  },
-  main: { display: "flex", flexDirection: "column", gap: 22, minWidth: 0 },
+  heroActions: { display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "flex-end", alignItems: "center" },
+  main: { position: "relative", zIndex: 1, display: "flex", flexDirection: "column", gap: 18, padding: "22px 28px 0", maxWidth: 1320, margin: "0 auto", width: "100%", boxSizing: "border-box" },
+
+  /* metrics */
   section: {
-    background: "#ffffff",
-    border: "1px solid #deded7",
-    borderRadius: 8,
-    padding: 24,
-    boxShadow: "0 1px 2px rgba(16,16,16,0.04)",
+    background: "var(--bg-elevated)",
+    border: "1px solid var(--border)",
+    borderRadius: 18,
+    padding: 22,
+    boxShadow: "var(--shadow-sm)",
+    transition: "background-color var(--transition), border-color var(--transition)",
   },
   sectionHeader: {
     display: "flex",
     justifyContent: "space-between",
-    flexWrap: "wrap",
-    gap: 12,
+    gap: 14,
     alignItems: "flex-start",
     marginBottom: 18,
-  },
-  moduleLabel: {
-    color: "#8a8a82",
-    fontSize: 11,
-    fontWeight: 800,
-    textTransform: "uppercase",
-    letterSpacing: 0,
+    flexWrap: "wrap",
   },
   twoColumn: {
     display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 420px), 1fr))",
-    gap: 22,
+    gridTemplateColumns: "minmax(300px, 0.42fr) minmax(420px, 0.58fr)",
+    gap: 18,
     alignItems: "start",
   },
+  rateRing: { position: "relative", width: 64, height: 64 },
+  rateLabel: {
+    position: "absolute",
+    inset: 0,
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  rateNumber: { fontSize: 15, lineHeight: 1, color: "var(--text-primary)" },
+  rateCaption: { fontSize: 8, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.5px" },
   statGrid: {
     display: "grid",
     gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-    gap: 14,
+    gap: 12,
   },
   metric: {
-    border: "1px solid #e6e6df",
-    borderLeft: "4px solid",
-    borderTop: "1px solid #e6e6df",
-    borderRadius: 8,
-    padding: "16px 18px",
-    background: "#fbfbf8",
-    transition: "transform 0.15s ease, box-shadow 0.15s ease",
+    borderTop: "3px solid",
+    borderRadius: 14,
+    padding: "14px 16px",
+    background: "var(--gradient-card)",
+    border: "1px solid var(--border)",
+    transition: "transform var(--transition-fast), box-shadow var(--transition-fast)",
   },
-  metricValue: { fontSize: 29, fontWeight: 850, lineHeight: 1, letterSpacing: 0 },
-  metricLabel: { marginTop: 7, fontSize: 10, color: "#6b6b64", textTransform: "uppercase", fontWeight: 700, letterSpacing: 0 },
+  metricTop: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 },
+  metricIcon: {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: 26,
+    height: 26,
+    borderRadius: 8,
+    fontSize: 12,
+    fontWeight: 800,
+  },
+  metricValue: { fontSize: 28, fontWeight: 900, lineHeight: 1, letterSpacing: "-0.5px" },
+  metricLabel: { marginTop: 8, fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 700, letterSpacing: "0.8px" },
   baselineStrip: {
     display: "flex",
     alignItems: "center",
     gap: 8,
     marginTop: 14,
-    padding: "11px 14px",
-    borderRadius: 8,
-    background: "#f2f2ed",
-    border: "1px solid #dfdfd7",
-    color: "#52524c",
+    padding: "10px 14px",
+    borderRadius: 12,
+    background: "var(--surface-3, var(--bg))",
+    border: "1px solid var(--border)",
+    color: "var(--text-secondary)",
     fontSize: 12,
     flexWrap: "wrap",
   },
   pillNeutral: {
-    background: "#171717",
-    color: "#ffffff",
-    borderRadius: 6,
+    background: "var(--gradient-primary)",
+    color: "#fff",
+    borderRadius: 999,
     padding: "3px 10px",
     fontSize: 10,
     fontWeight: 700,
     textTransform: "uppercase",
-    letterSpacing: 0,
+    letterSpacing: "0.5px",
   },
-  dotSep: { color: "#9c9c94" },
-  form: { display: "flex", flexDirection: "column", gap: 13 },
+  dotSep: { color: "var(--text-muted)" },
+
+  /* form */
+  form: { display: "flex", flexDirection: "column", gap: 12 },
   label: {
     display: "flex",
     flexDirection: "column",
     gap: 5,
-    color: "#40403a",
+    color: "var(--text-secondary)",
     fontSize: 12,
-    fontWeight: 700,
+    fontWeight: 600,
   },
   input: {
-    border: "1px solid #d9d9d2",
-    borderRadius: 8,
-    padding: "10px 12px",
+    border: "1.5px solid var(--border)",
+    borderRadius: 10,
+    padding: "9px 12px",
     fontSize: 13,
-    background: "#fbfbf8",
-    color: "#171717",
+    background: "var(--bg)",
+    color: "var(--text-primary)",
     boxSizing: "border-box",
-    transition: "border-color 0.15s ease, box-shadow 0.15s ease",
+    transition: "border-color var(--transition-fast), box-shadow var(--transition-fast)",
     outline: "none",
+    fontFamily: "inherit",
   },
   primaryButton: {
     border: "none",
-    borderRadius: 8,
-    padding: "11px 16px",
-    background: "#171717",
-    color: "#ffffff",
+    borderRadius: 12,
+    padding: "12px 18px",
+    background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+    color: "#fff",
     fontWeight: 700,
     fontSize: 13,
     cursor: "pointer",
-    boxShadow: "0 1px 1px rgba(16,16,16,0.2)",
-    transition: "transform 0.1s ease, box-shadow 0.1s ease",
+    boxShadow: "0 4px 14px rgba(102,126,234,0.4)",
+    transition: "transform var(--transition-fast), box-shadow var(--transition-fast)",
   },
   secondaryButton: {
-    border: "1px solid #3a3a3a",
-    borderRadius: 8,
+    border: "1.5px solid var(--border-strong)",
+    borderRadius: 10,
     padding: "9px 14px",
-    background: "#181818",
-    color: "#f4f4f0",
+    background: "var(--bg-elevated)",
+    color: "var(--text-secondary)",
     fontWeight: 600,
     fontSize: 13,
     cursor: "pointer",
-    transition: "background 0.15s ease",
+    transition: "all var(--transition-fast)",
   },
   undoButton: {
-    border: "1px solid #5d5135",
-    borderRadius: 8,
+    border: "1.5px solid var(--warning-glow)",
+    borderRadius: 10,
     padding: "9px 14px",
-    background: "#221f16",
-    color: "#ffd979",
+    background: "var(--warning-light)",
+    color: "var(--warning-dark)",
     fontWeight: 700,
     fontSize: 13,
-    transition: "background 0.15s ease",
+    cursor: "pointer",
+    transition: "all var(--transition-fast)",
   },
+  themeToggle: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 7,
+    border: "1.5px solid var(--primary-200)",
+    borderRadius: 10,
+    padding: "9px 14px",
+    background: "var(--primary-50)",
+    color: "var(--primary-dark)",
+    fontWeight: 700,
+    fontSize: 12,
+    cursor: "pointer",
+    transition: "all var(--transition-fast)",
+  },
+  themeToggleIcon: { fontSize: 14 },
+  themeToggleLabel: { fontSize: 12 },
+
   errorBox: {
     marginTop: 12,
-    background: "#fff1f1",
-    color: "#b91c1c",
+    background: "var(--danger-light)",
+    color: "var(--danger-dark)",
     padding: 12,
-    borderRadius: 8,
+    borderRadius: 12,
     fontSize: 12,
-    border: "1px solid #f4b4b4",
+    border: "1px solid var(--danger-glow)",
+    wordBreak: "break-word",
   },
+  codeInline: {
+    background: "var(--surface-3, var(--bg))",
+    padding: "1px 6px",
+    borderRadius: 6,
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 12,
+  },
+
+  /* deltas */
   deltaGrid: {
     display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+    gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
     gap: 10,
   },
   deltaMetric: {
-    border: "1px solid #e6e6df",
-    borderRadius: 8,
+    border: "1px solid var(--border)",
+    borderRadius: 12,
     padding: 12,
-    background: "#fbfbf8",
+    background: "var(--gradient-card)",
     minWidth: 0,
   },
   deltaFlow: {
@@ -1265,87 +1394,100 @@ const styles = {
     marginTop: 6,
     fontSize: 17,
     fontWeight: 700,
+    color: "var(--text-primary)",
   },
+  deltaArrow: { color: "var(--text-muted)", fontSize: 13 },
   deltaText: { marginTop: 3, fontSize: 11, fontWeight: 700 },
-  reasonBox: { marginTop: 18, borderTop: "1px solid #e6e6df", paddingTop: 18 },
+
+  /* reasons */
+  reasonBox: { marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 16 },
   reasonHeader: { display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" },
   smallCaps: {
-    color: "#74746d",
+    color: "var(--text-muted)",
     fontSize: 10,
-    letterSpacing: 0,
+    letterSpacing: "0.8px",
     textTransform: "uppercase",
     fontWeight: 700,
   },
-  reasonRows: { display: "flex", flexDirection: "column", gap: 0, marginTop: 10 },
+  reasonRows: { display: "flex", flexDirection: "column", marginTop: 8 },
   reasonRow: {
     display: "grid",
     gridTemplateColumns: "8px minmax(150px, 1fr) auto auto",
     gap: 10,
     alignItems: "center",
     fontSize: 12,
-    padding: "10px 0",
-    borderBottom: "1px solid #eeeeea",
+    padding: "9px 0",
+    borderBottom: "1px solid var(--border)",
+    color: "var(--text-secondary)",
   },
-  reasonDotOriginal: { width: 8, height: 8, borderRadius: 8, background: "#d99400" },
-  reasonDotDisruption: { width: 8, height: 8, borderRadius: 8, background: "#dc2626" },
-  reasonText: { color: "#40403a", fontWeight: 500 },
+  reasonDotOriginal: {
+    width: 8, height: 8, borderRadius: 8,
+    background: "var(--warning)",
+    boxShadow: "0 0 8px var(--warning-glow)",
+  },
+  reasonDotDisruption: {
+    width: 8, height: 8, borderRadius: 8,
+    background: "var(--danger)",
+    boxShadow: "0 0 8px var(--danger-glow)",
+  },
+  reasonText: { color: "var(--text-secondary)", fontWeight: 500 },
   reasonLabelOriginal: {
-    background: "#fff7d6",
-    color: "#6f4e00",
-    borderRadius: 6,
-    padding: "3px 8px",
+    background: "var(--warning-light)",
+    color: "var(--warning-dark)",
+    borderRadius: 999,
+    padding: "3px 9px",
     fontSize: 10,
-    fontWeight: 600,
-    border: "1px solid #ecd47a",
+    fontWeight: 700,
   },
   reasonLabelDisruption: {
-    background: "#fff1f1",
-    color: "#b91c1c",
-    borderRadius: 6,
-    padding: "3px 8px",
+    background: "var(--danger-light)",
+    color: "var(--danger-dark)",
+    borderRadius: 999,
+    padding: "3px 9px",
     fontSize: 10,
-    fontWeight: 600,
-    border: "1px solid #f4b4b4",
+    fontWeight: 700,
   },
-  diffPanel: { marginTop: 18, borderTop: "1px solid #e6e6df", paddingTop: 18 },
+
+  /* diffs */
+  diffPanel: { marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 16 },
   diffSummary: {
     display: "flex",
     flexDirection: "column",
     gap: 4,
     padding: 14,
-    borderRadius: 8,
-    background: "#f2f2ed",
-    color: "#2f2f2a",
-    border: "1px solid #dfdfd7",
+    borderRadius: 12,
+    background: "linear-gradient(135deg, var(--primary-50), transparent)",
+    color: "var(--primary-dark)",
+    border: "1px solid var(--primary-200)",
     fontSize: 12,
   },
-  diffList: { display: "flex", flexDirection: "column", gap: 10, marginTop: 12 },
+  diffList: { display: "flex", flexDirection: "column", gap: 10, marginTop: 12, maxHeight: 480, overflowY: "auto", paddingRight: 4 },
   diffCard: {
-    border: "1px solid #e6e6df",
-    borderRadius: 8,
+    border: "1px solid var(--border)",
+    borderRadius: 12,
     padding: 14,
-    background: "#ffffff",
-    transition: "box-shadow 0.15s ease",
+    background: "var(--bg-elevated)",
+    transition: "box-shadow var(--transition-fast), transform var(--transition-fast)",
   },
   diffTopLine: { display: "flex", justifyContent: "space-between", gap: 10, alignItems: "flex-start" },
-  diffTitle: { margin: "3px 0 0", fontSize: 14, fontWeight: 600 },
+  diffTitle: { margin: "3px 0 0", fontSize: 14, fontWeight: 700, color: "var(--text-primary)" },
   outcomeCancelled: {
-    background: "#fff1f1",
-    color: "#b91c1c",
-    borderRadius: 6,
+    background: "var(--danger-light)",
+    color: "var(--danger-dark)",
+    borderRadius: 999,
     padding: "3px 10px",
     fontSize: 10,
     fontWeight: 700,
-    border: "1px solid #f4b4b4",
+    whiteSpace: "nowrap",
   },
   outcomeMoved: {
-    background: "#e7f8ef",
-    color: "#065f46",
-    borderRadius: 6,
+    background: "var(--success-light)",
+    color: "var(--success-dark)",
+    borderRadius: 999,
     padding: "3px 10px",
-    fontSize: "10px",
+    fontSize: 10,
     fontWeight: 700,
-    border: "1px solid #9ed8b7",
+    whiteSpace: "nowrap",
   },
   slotCompare: {
     display: "grid",
@@ -1358,39 +1500,43 @@ const styles = {
     display: "flex",
     flexDirection: "column",
     gap: 3,
-    border: "1px solid #d9d9d2",
-    background: "#fbfbf8",
-    borderRadius: 8,
+    border: "1px solid var(--primary-200)",
+    background: "var(--primary-50)",
+    borderRadius: 10,
     padding: 10,
     minWidth: 0,
     fontSize: 11,
+    color: "var(--primary-dark)",
   },
   slotBlockEmpty: {
     display: "flex",
     flexDirection: "column",
     gap: 3,
-    border: "1px solid #f4b4b4",
-    background: "#fff7f7",
-    borderRadius: 8,
+    border: "1px solid var(--danger-glow)",
+    background: "var(--danger-light)",
+    borderRadius: 10,
     padding: 10,
     minWidth: 0,
     fontSize: 11,
+    color: "var(--danger-dark)",
   },
-  slotTitle: { color: "#74746d", fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0 },
-  compareArrow: { color: "#8a8a82", fontWeight: 900, fontSize: 16 },
+  slotTitle: { color: "var(--text-muted)", fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.8px" },
+  compareArrow: { color: "var(--text-muted)", fontWeight: 900, fontSize: 15 },
   notifyRow: { display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10 },
   notifyChip: {
     display: "inline-flex",
     gap: 4,
     alignItems: "center",
-    borderRadius: 6,
-    padding: "4px 8px",
+    borderRadius: 8,
+    padding: "4px 9px",
     fontSize: 10,
     fontWeight: 600,
   },
-  notifyStudent: { background: "#eef6ff", color: "#1d4e89", border: "1px solid #bcd7f0" },
-  notifyPanel: { background: "#f4f2ff", color: "#51458b", border: "1px solid #d8d1f2" },
-  notifyCoordinator: { background: "#fff5e8", color: "#9a5516", border: "1px solid #edc99d" },
+  notifyStudent: { background: "var(--info-light)", color: "var(--info-dark)", border: "1px solid var(--info-glow)" },
+  notifyPanel: { background: "var(--primary-50)", color: "var(--primary-dark)", border: "1px solid var(--primary-200)" },
+  notifyCoordinator: { background: "var(--warning-light)", color: "var(--warning-dark)", border: "1px solid var(--warning-glow)" },
+
+  /* activity */
   activityList: { display: "flex", flexDirection: "column", gap: 8, marginTop: 16 },
   activityItem: {
     display: "grid",
@@ -1398,11 +1544,10 @@ const styles = {
     gap: 10,
     alignItems: "start",
     padding: 10,
-    border: "1px solid #e6e6df",
-    borderRadius: 8,
-    background: "#fbfbf8",
+    border: "1px solid var(--border)",
+    borderRadius: 12,
+    background: "var(--bg-elevated)",
     fontSize: 12,
-    transition: "box-shadow 0.15s ease",
   },
   activityCount: {
     display: "inline-flex",
@@ -1410,134 +1555,50 @@ const styles = {
     justifyContent: "center",
     width: 28,
     height: 28,
-    borderRadius: 8,
-    background: "#171717",
-    color: "#ffffff",
+    borderRadius: 9,
+    background: "var(--gradient-primary)",
+    color: "#fff",
     fontWeight: 800,
     fontSize: 12,
   },
-  browserTools: { display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-start", maxWidth: "100%" },
-  paginationBar: {
-    display: "flex",
-    justifyContent: "space-between",
-    gap: 10,
-    alignItems: "center",
-    marginBottom: 12,
-    color: "#52524c",
-    fontSize: 12,
-    flexWrap: "wrap",
-  },
-  pageButtons: { display: "flex", alignItems: "center", gap: 8 },
-  pageButton: {
-    border: "1px solid #d9d9d2",
-    borderRadius: 8,
-    padding: "6px 12px",
-    background: "#fbfbf8",
-    color: "#40403a",
-    fontWeight: 600,
-    fontSize: 12,
-    cursor: "pointer",
-    transition: "all 0.15s ease",
-  },
-  tableWrap: { border: "1px solid #deded7", borderRadius: 8, overflowX: "auto", boxShadow: "0 1px 2px rgba(16,16,16,0.04)" },
-  table: { width: "100%", borderCollapse: "collapse", fontSize: 12 },
-  th: {
-    textAlign: "left",
-    padding: "11px 14px",
-    background: "#f2f2ed",
-    borderBottom: "1px solid #deded7",
-    color: "#52524c",
-    fontSize: 11,
-    fontWeight: 600,
-    textTransform: "uppercase",
-    letterSpacing: 0,
-  },
-  td: { padding: "10px 14px", borderBottom: "1px solid #eeeeea", whiteSpace: "nowrap" },
-  tdStrong: {
-    padding: "10px 14px",
-    borderBottom: "1px solid #eeeeea",
-    whiteSpace: "nowrap",
-    fontWeight: 700,
-    color: "#171717",
-  },
-  reasonCell: {
-    padding: "10px 14px",
-    borderBottom: "1px solid #eeeeea",
-    color: "#6b6b64",
-    minWidth: 210,
-    fontSize: 11,
-  },
-  badgeScheduled: {
-    background: "#e7f8ef",
-    color: "#065f46",
-    borderRadius: 6,
-    padding: "3px 10px",
-    fontSize: 11,
-    fontWeight: 600,
-    whiteSpace: "nowrap",
-    border: "1px solid #9ed8b7",
-  },
-  badgeCancelled: {
-    background: "#f2f2ed",
-    color: "#52524c",
-    borderRadius: 6,
-    padding: "3px 10px",
-    fontSize: 11,
-    fontWeight: 600,
-    whiteSpace: "nowrap",
-    border: "1px solid #d9d9d2",
-  },
-  badgeOriginal: {
-    background: "#fff7d6",
-    color: "#6f4e00",
-    borderRadius: 6,
-    padding: "3px 10px",
-    fontSize: 11,
-    fontWeight: 600,
-    whiteSpace: "nowrap",
-    border: "1px solid #ecd47a",
-  },
-  badgeDisruption: {
-    background: "#fff1f1",
-    color: "#b91c1c",
-    borderRadius: 6,
-    padding: "3px 10px",
-    fontSize: 11,
-    fontWeight: 600,
-    whiteSpace: "nowrap",
-    border: "1px solid #f4b4b4",
-  },
-  emptyState: {
-    marginTop: 10,
-    padding: 14,
-    border: "1px dashed #cfcfc7",
-    borderRadius: 8,
-    background: "#fbfbf8",
-    color: "#6b6b64",
-    fontSize: 12,
-    textAlign: "center",
-  },
+
+  /* quickpick */
   quickPick: {
-    marginBottom: 14,
-    border: "1px solid #deded7",
-    borderRadius: 8,
-    background: "#ffffff",
+    marginBottom: 4,
+    border: "1px solid var(--border)",
+    borderRadius: 12,
+    background: "var(--bg-elevated)",
     overflow: "hidden",
   },
   quickPickHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
     padding: "8px 12px",
-    background: "#f2f2ed",
-    fontSize: 11,
-    fontWeight: 600,
-    color: "#52524c",
+    background: "linear-gradient(135deg, var(--primary-50), transparent)",
+    fontSize: 10,
+    fontWeight: 700,
+    color: "var(--primary-dark)",
     textTransform: "uppercase",
-    letterSpacing: 0,
-    borderBottom: "1px solid #deded7",
+    letterSpacing: "0.8px",
+    borderBottom: "1px solid var(--border)",
+  },
+  quickPickCount: {
+    background: "var(--gradient-primary)",
+    color: "#fff",
+    borderRadius: 999,
+    minWidth: 20,
+    height: 18,
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    fontSize: 10,
+    padding: "0 6px",
   },
   quickPickList: {
     display: "flex",
     flexDirection: "column",
-    maxHeight: 200,
+    maxHeight: 190,
     overflowY: "auto",
   },
   quickPickItem: {
@@ -1545,32 +1606,160 @@ const styles = {
     gridTemplateColumns: "auto 1fr auto",
     gap: "4px 10px",
     alignItems: "center",
-    padding: "7px 12px",
+    padding: "8px 12px",
     border: "none",
-    borderBottom: "1px solid #eeeeea",
+    borderBottom: "1px solid var(--border)",
     background: "transparent",
     cursor: "pointer",
     textAlign: "left",
     fontSize: 12,
-    transition: "background 0.1s ease",
+    color: "var(--text-primary)",
+    transition: "background var(--transition-fast)",
+    fontFamily: "inherit",
   },
   quickPickMain: {
     fontWeight: 700,
-    color: "#171717",
-    fontFamily: "monospace",
+    color: "var(--text-primary)",
+    fontFamily: "'JetBrains Mono', monospace",
     fontSize: 12,
   },
   quickPickSub: {
-    color: "#6b6b64",
+    color: "var(--text-muted)",
     fontSize: 11,
     whiteSpace: "nowrap",
     overflow: "hidden",
     textOverflow: "ellipsis",
   },
   quickPickTime: {
-    color: "#1d4e89",
+    color: "var(--primary)",
     fontWeight: 600,
     fontSize: 11,
     whiteSpace: "nowrap",
+  },
+  quickPickChevron: { color: "var(--text-muted)", fontWeight: 700 },
+
+  /* browser */
+  browserTools: { display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" },
+  paginationBar: {
+    display: "flex",
+    justifyContent: "space-between",
+    gap: 10,
+    alignItems: "center",
+    marginBottom: 12,
+    color: "var(--text-secondary)",
+    fontSize: 12,
+    flexWrap: "wrap",
+  },
+  pageButtons: { display: "flex", alignItems: "center", gap: 8 },
+  pageButton: {
+    border: "1.5px solid var(--border)",
+    borderRadius: 10,
+    padding: "6px 12px",
+    background: "var(--bg-elevated)",
+    color: "var(--text-secondary)",
+    fontWeight: 600,
+    fontSize: 12,
+    cursor: "pointer",
+    transition: "all var(--transition-fast)",
+  },
+  pageIndicator: { fontSize: 12, color: "var(--text-secondary)" },
+  tableWrap: {
+    border: "1px solid var(--border)",
+    borderRadius: 14,
+    overflowX: "auto",
+    boxShadow: "var(--shadow-sm)",
+  },
+  table: { width: "100%", borderCollapse: "collapse", fontSize: 12 },
+  th: {
+    textAlign: "left",
+    padding: "11px 14px",
+    background: "linear-gradient(180deg, var(--primary-50), transparent)",
+    borderBottom: "2px solid var(--primary-200)",
+    color: "var(--primary-dark)",
+    fontSize: 10,
+    fontWeight: 700,
+    textTransform: "uppercase",
+    letterSpacing: "0.8px",
+    whiteSpace: "nowrap",
+  },
+  td: { padding: "10px 14px", borderBottom: "1px solid var(--border)", whiteSpace: "nowrap", color: "var(--text-secondary)" },
+  tdStrong: {
+    padding: "10px 14px",
+    borderBottom: "1px solid var(--border)",
+    whiteSpace: "nowrap",
+    fontWeight: 700,
+    color: "var(--text-primary)",
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 12,
+  },
+  tdMono: {
+    padding: "10px 14px",
+    borderBottom: "1px solid var(--border)",
+    whiteSpace: "nowrap",
+    color: "var(--text-secondary)",
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 12,
+  },
+  reasonCell: {
+    padding: "10px 14px",
+    borderBottom: "1px solid var(--border)",
+    color: "var(--text-muted)",
+    minWidth: 210,
+    fontSize: 11,
+  },
+
+  badgeScheduled: {
+    background: "var(--success-light)",
+    color: "var(--success-dark)",
+    borderRadius: 999,
+    padding: "3px 10px",
+    fontSize: 11,
+    fontWeight: 700,
+    whiteSpace: "nowrap",
+  },
+  badgeCancelled: {
+    background: "var(--surface-3, var(--bg))",
+    color: "var(--text-muted)",
+    borderRadius: 999,
+    padding: "3px 10px",
+    fontSize: 11,
+    fontWeight: 700,
+    whiteSpace: "nowrap",
+    border: "1px solid var(--border)",
+  },
+  badgeOriginal: {
+    background: "var(--warning-light)",
+    color: "var(--warning-dark)",
+    borderRadius: 999,
+    padding: "3px 10px",
+    fontSize: 11,
+    fontWeight: 700,
+    whiteSpace: "nowrap",
+  },
+  badgeDisruption: {
+    background: "var(--danger-light)",
+    color: "var(--danger-dark)",
+    borderRadius: 999,
+    padding: "3px 10px",
+    fontSize: 11,
+    fontWeight: 700,
+    whiteSpace: "nowrap",
+  },
+  emptyState: {
+    marginTop: 10,
+    padding: 16,
+    border: "1.5px dashed var(--border-strong)",
+    borderRadius: 12,
+    background: "var(--surface-3, var(--bg))",
+    color: "var(--text-muted)",
+    fontSize: 12,
+    textAlign: "center",
+  },
+  footer: {
+    textAlign: "center",
+    padding: "26px 0 8px",
+    color: "var(--text-muted)",
+    fontSize: 11,
+    letterSpacing: "0.4px",
   },
 };
